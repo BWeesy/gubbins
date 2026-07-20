@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# glowbridge: real config carries Bright/MQTT credentials; only the
+# example is committed. Also keep runtime state (auth token, watermarks).
+glowbridge.toml
+state.json

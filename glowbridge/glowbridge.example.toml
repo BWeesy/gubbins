@@ -1,0 +1,71 @@
+# glowbridge example configuration.
+# Copy to ~/.config/glowbridge/glowbridge.toml and chmod 600 if credentials
+# are stored inline. Every value shown is the default unless marked
+# REQUIRED. Full reference: docs/CONFIG.md.
+
+[glowmarkt]
+# Bright app credentials. REQUIRED here or via GLOWBRIDGE_GLOW_USERNAME /
+# GLOWBRIDGE_GLOW_PASSWORD environment variables (env wins).
+username = ""
+password = ""
+
+# Application ID presented to the Glowmarkt API. The default is the
+# published Bright app ID; only change if Hildebrand rotate it.
+#application_id = "b0f1b774-a586-4f72-9edd-27ead8aa7a8d"
+
+# Optional pin. When set, discovery is skipped entirely and a pinned ID
+# that does not exist is a fatal error. Leave unset to auto-discover.
+#resources = ["1f31f05e-2cec-4cf8-b705-43294d6a7a96"]
+
+[schedule]
+# Seconds between poll cycles. Minimum 300.
+interval = 1800
+# Maximum per-install schedule offset in seconds, derived deterministically
+# from the machine ID. Spreads load across installs; 0 disables.
+jitter = 300
+# Only intervals older than this many seconds are published. Guards
+# against DCC revisions to freshly delivered data.
+finalisation_lag = 5400
+
+[retry]
+# In-cycle retry budget; when exhausted the cycle is skipped, not fatal.
+max_attempts = 5
+# Exponential backoff: base * 2^(attempt-1) seconds, capped, with jitter.
+backoff_base = 60
+backoff_max = 1800
+# Minimum seconds between authentication attempts, enforced across
+# restarts. Protects the Bright account from lockout.
+auth_floor = 3600
+
+[mqtt]
+host = "localhost"          # REQUIRED in practice
+port = 1883
+username = ""
+password = ""               # or GLOWBRIDGE_MQTT_PASSWORD
+client_id = "glowbridge"
+# Topic layout: {topic_prefix}/{resource_id}/state and /status, plus
+# {topic_prefix}/bridge/availability and /status.
+topic_prefix = "glow"
+# Home Assistant MQTT discovery prefix; match HA's configuration.
+discovery_prefix = "homeassistant"
+qos = 1
+
+[mqtt.tls]
+enabled = false
+# PEM paths. Empty ca_cert uses the system trust store. client_cert and
+# client_key must be set together (mutual TLS).
+ca_cert = ""
+client_cert = ""
+client_key = ""
+# Disables certificate verification. Never use outside a lab.
+insecure_skip_verify = false
+
+[state]
+# Directory for state.json (watermarks, cumulative totals, auth token).
+# Empty resolves to $STATE_DIRECTORY (systemd), then $XDG_STATE_HOME,
+# then ~/.local/state/glowbridge.
+dir = ""
+
+[logging]
+level = "info"              # debug, info, warning, error
+format = "text"             # text or json
