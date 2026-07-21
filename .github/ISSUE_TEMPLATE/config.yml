@@ -1,0 +1,11 @@
+# Blank issues stay enabled so questions and feature requests are not forced
+# through the bug form (which would just fill it with junk). Set this to
+# false if drive-by bug reports without debug output become a problem.
+blank_issues_enabled: true
+
+contact_links:
+  - name: glowbridge troubleshooting — read this first for missing data
+    url: https://github.com/BWeesy/gubbins/blob/main/glowbridge/README.md#troubleshooting
+    about: >-
+      Missing or stale readings are usually the DCC pipeline rather than the
+      bridge. This tells you which, in about a minute.
