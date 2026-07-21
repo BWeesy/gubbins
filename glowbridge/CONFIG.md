@@ -85,6 +85,28 @@ publishing values the DCC subsequently changes, which the bridge will
 not correct. `0` is permitted for testing against fixtures and is not
 suitable for live use.
 
+### `heal_horizon` — integer seconds, default `604800` (7 days), must exceed `finalisation_lag`
+How long a missing half-hour is tolerated before the completeness frontier
+gives up on it.
+
+Emission tracks a contiguous frontier (the watermark, published as
+`data_complete_to`) plus a ledger of windows already emitted *ahead* of it.
+When the DCC is missing a half-hour, later windows are still emitted
+immediately and recorded in the ledger — consumption is never withheld —
+but the frontier holds at the gap, because everything up to the frontier is
+what is provably complete. If the missing window later arrives it is
+emitted exactly once and the frontier sweeps forward, draining the ledger.
+
+`heal_horizon` bounds that wait. A gap older than this is abandoned: the
+frontier steps over it, permanently losing that one half-hour from the
+cumulative total, so a window the DCC never delivers cannot freeze
+`data_complete_to` forever (and the ledger stays bounded to roughly this
+span). It must be larger than `finalisation_lag` — a window has to outlive
+its revision guard before it can be written off. Raise it to give a
+chronically slow feed more time to backfill at the cost of `data_complete_to`
+lagging longer before it gives up; lower it to advance the completeness
+signal sooner at the cost of writing off recoverable gaps.
+
 ## `[retry]`
 
 Retries operate within a cycle. A cycle that exhausts its budget is
@@ -173,9 +195,10 @@ the path can impersonate the broker and read half-hourly occupancy data.
 ## `[state]`
 
 ### `dir` — string path, default `""`
-Directory holding `state.json` — watermarks, cumulative totals (integer
-watt-hours), the cached auth token and the discovered resource cache.
-Resolution when empty, in order:
+Directory holding `state.json` — per-resource frontier watermark and
+emitted-window ledger, cumulative totals (integer watt-hours), the cached
+auth token and the discovered resource cache. Resolution when empty, in
+order:
 
 1. `$STATE_DIRECTORY` (set by systemd for units declaring
    `StateDirectory=`; the first entry if multiple)
@@ -183,11 +206,13 @@ Resolution when empty, in order:
 3. `~/.local/state/glowbridge`
 
 The file is written atomically (temp file, fsync, rename) with mode
-`0600`, since it contains the API token. A missing, unreadable, corrupt
-or unrecognised-schema file is logged and treated as a fresh install:
-watermarks reseed 24 hours before the current run, the cumulative total
-restarts, and Home Assistant records a single meter-reset event. Nothing
-crash-loops on bad state.
+`0600`, since it contains the API token. It carries a `schema` version and
+is migrated forward in place on upgrade (preserving cumulative totals, so
+an upgrade emits no spurious meter-reset); an *unrecognised* schema, or a
+missing, unreadable or corrupt file, is logged and treated as a fresh
+install: watermarks reseed 24 hours before the current run, the cumulative
+total restarts, and Home Assistant records a single meter-reset event.
+Nothing crash-loops on bad state.
 
 ## `[logging]`
 

@@ -19,9 +19,12 @@ Design invariants — do not break these when modifying:
     observability only. The bridge NEVER subscribes to anything; it is a
     pure publisher. Do not add recover-from-broker logic.
   * Published cumulative values are monotonic by construction. Only intervals
-    past the finalisation lag are emitted, each interval is emitted exactly
-    once, and a gap in the data halts watermark advancement rather than
-    being skipped.
+    past the finalisation lag are emitted, and each interval is emitted
+    exactly once. Emission is tracked by a contiguous frontier (watermark)
+    plus a ledger of already-emitted windows ahead of it: a gap holds the
+    frontier (so data_complete_to stays honest) without blocking emission of
+    later windows, and a late arrival heals the gap exactly once. See
+    select_emittable.
   * State is written to disk before anything is published. A crash between
     write and publish loses one publish (a gap), never double-counts.
   * Secrets (Bright password, API token, MQTT password) must never reach the
@@ -63,7 +66,7 @@ INITIAL_BACKFILL = timedelta(hours=24)
 # large PT30M ranges, so catch-up after downtime is chunked.
 MAX_FETCH_SPAN = timedelta(days=7)
 
-STATE_SCHEMA = 1
+STATE_SCHEMA = 2
 STATUS_SCHEMA = 1
 
 # Consumption classifiers to bridge. Cost resources are deliberately not
@@ -134,6 +137,7 @@ class ScheduleConfig:
     interval: int = 1800
     jitter: int = 300
     finalisation_lag: int = 5400
+    heal_horizon: int = 604800
 
 
 @dataclasses.dataclass(frozen=True)
@@ -179,6 +183,7 @@ _CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "interval": int,
         "jitter": int,
         "finalisation_lag": int,
+        "heal_horizon": int,
     },
     "retry": {
         "max_attempts": int,
@@ -245,6 +250,13 @@ def _validate_semantics(cfg: Config) -> list[str]:
         errors.append("schedule.jitter: must be >= 0")
     if s.finalisation_lag < 0:
         errors.append("schedule.finalisation_lag: must be >= 0")
+    if s.heal_horizon <= s.finalisation_lag:
+        # A gap must outlive the finalisation lag before it can be abandoned,
+        # otherwise the frontier could skip a window that has not yet had its
+        # chance to arrive.
+        errors.append(
+            "schedule.heal_horizon: must be greater than finalisation_lag"
+        )
     r = cfg.retry
     if r.max_attempts < 1:
         errors.append("retry.max_attempts: must be >= 1")
@@ -435,6 +447,8 @@ class StateFile:
                 "state file %s is corrupt (%s); starting fresh", self.path, exc
             )
             return
+        if isinstance(data, dict):
+            data = _migrate_state(data)
         if not isinstance(data, dict) or data.get("schema") != STATE_SCHEMA:
             log.warning(
                 "state file %s has unsupported schema %r; starting fresh",
@@ -497,6 +511,7 @@ class StateFile:
                 "classifier": classifier,
                 "name": name,
                 "watermark": watermark.isoformat(),
+                "emitted": [],
                 "cumulative_wh": 0,
             }
         else:
@@ -509,15 +524,50 @@ class StateFile:
     def watermark(self, resource_id: str) -> datetime:
         return _parse_iso(self.data["resources"][resource_id]["watermark"])
 
+    def emitted(self, resource_id: str) -> set[datetime]:
+        """Starts of already-emitted windows lying ahead of the watermark.
+
+        These are the non-contiguous windows folded into the cumulative
+        total while a gap below them still holds the frontier back. Held as
+        a set so re-fetched windows are recognised and never counted twice.
+        """
+        raw = self.data["resources"][resource_id].get("emitted", [])
+        return {_parse_iso(v) for v in raw}
+
     def advance(
-        self, resource_id: str, watermark: datetime, added_wh: int
+        self,
+        resource_id: str,
+        watermark: datetime,
+        emitted: set[datetime],
+        added_wh: int,
     ) -> None:
         entry = self.data["resources"][resource_id]
         entry["watermark"] = watermark.isoformat()
+        entry["emitted"] = [dt.isoformat() for dt in sorted(emitted)]
         entry["cumulative_wh"] = int(entry["cumulative_wh"]) + int(added_wh)
 
     def cumulative_wh(self, resource_id: str) -> int:
         return int(self.data["resources"][resource_id]["cumulative_wh"])
+
+
+def _migrate_state(data: dict[str, Any]) -> dict[str, Any]:
+    """Bring an older on-disk state layout up to the current schema.
+
+    Migration preserves cumulative totals so upgrading the bridge does not
+    manufacture a spurious meter-reset in Home Assistant. Only forward
+    migration is supported; an unrecognised (e.g. future) schema falls
+    through to the caller's fresh-start handling.
+
+    v1 -> v2: adds the per-resource ``emitted`` ledger (the set of
+    already-emitted window starts ahead of the watermark). A v1 watermark
+    was a strict contiguous frontier with nothing emitted above it, so the
+    correct v2 value is an empty ledger.
+    """
+    if data.get("schema") == 1:
+        for entry in data.get("resources", {}).values():
+            entry.setdefault("emitted", [])
+        data["schema"] = 2
+    return data
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -598,6 +648,7 @@ class Reading:
 @dataclasses.dataclass(frozen=True)
 class Emission:
     new_watermark: datetime
+    new_emitted: set[datetime]
     added_wh: int
     intervals: int
 
@@ -605,41 +656,79 @@ class Emission:
 def select_emittable(
     readings: list[Reading],
     watermark: datetime,
+    emitted: set[datetime],
     now: datetime,
     finalisation_lag: int,
+    heal_horizon: int,
 ) -> Emission:
     """Choose which intervals to fold into the cumulative total.
 
-    Rules, in order:
-      * only intervals whose END is at or before now - finalisation_lag
-        (younger data may still be revised by the DCC);
-      * only intervals at or after the watermark (everything earlier has
-        already been emitted);
-      * intervals must be contiguous from the watermark. The first missing
-        half-hour halts advancement, even if later intervals are present:
-        skipping a gap would exclude that half-hour from the cumulative
-        total forever once the watermark moved past it.
+    The state is a contiguous frontier (``watermark``) plus a *ledger*
+    (``emitted``): the set of window starts strictly ahead of the frontier
+    that have already been counted while a gap below them holds the
+    frontier back. Together they give exactly-once, monotonic emission
+    without a stall mode:
+
+      * A window is finalised once its END is at or before
+        ``now - finalisation_lag``; younger data may still be revised by
+        the DCC and is left alone.
+      * Any finalised window at or above the watermark that is not already
+        in the ledger is emitted, *in whatever order it arrives*. A gap no
+        longer halts emission — later windows are folded in immediately and
+        recorded in the ledger. This is what makes a late-arriving interval
+        self-heal exactly once: on the refetch that finally returns it, it
+        is emitted and the ledger drains as the frontier sweeps over it.
+      * The frontier then sweeps forward across every contiguous ledger
+        entry (draining them), so ``data_complete_to`` still means "all
+        windows up to here are accounted for".
+      * A gap that outlives ``heal_horizon`` is abandoned: the frontier
+        steps over it (accepting that one lost half-hour) so a permanently
+        undelivered window cannot freeze the frontier forever. The ledger
+        is thereby bounded to roughly ``heal_horizon`` of entries.
+
+    Windows below the watermark are ignored: they were emitted and swept
+    long ago, and the API is never refetched behind the frontier.
     """
     cutoff = now - timedelta(seconds=finalisation_lag)
-    by_start = {r.start: r for r in readings if r.start >= watermark}
+    abandon_before = now - timedelta(seconds=heal_horizon)
+    step = timedelta(seconds=HALF_HOUR)
 
-    cursor = watermark
+    emitted = set(emitted)
     added_wh = 0
     count = 0
-    while True:
-        end = cursor + timedelta(seconds=HALF_HOUR)
-        if end > cutoff:
-            break
-        reading = by_start.get(cursor)
-        if reading is None:
-            log.debug(
-                "gap at %s: interval absent; holding watermark", cursor.isoformat()
-            )
-            break
+    for reading in readings:
+        start = reading.start
+        if start < watermark or start in emitted:
+            continue  # already counted (below frontier or already in ledger)
+        if start + step > cutoff:
+            continue  # not yet finalised
         added_wh += round(reading.kwh * 1000)
+        emitted.add(start)
         count += 1
-        cursor = end
-    return Emission(new_watermark=cursor, added_wh=added_wh, intervals=count)
+
+    # Sweep the contiguous frontier forward, draining ledger entries as it
+    # passes them and stepping over gaps too old to keep waiting on.
+    cursor = watermark
+    while True:
+        if cursor in emitted:
+            emitted.discard(cursor)
+            cursor += step
+            continue
+        if cursor + step <= cutoff and cursor < abandon_before:
+            log.warning(
+                "gap at %s exceeded heal horizon; abandoning window",
+                cursor.isoformat(),
+            )
+            cursor += step
+            continue
+        break
+
+    return Emission(
+        new_watermark=cursor,
+        new_emitted=emitted,
+        added_wh=added_wh,
+        intervals=count,
+    )
 
 
 def fetch_windows(
@@ -1046,10 +1135,17 @@ class Bridge:
                 # Freshly discovered resources are picked up next cycle;
                 # this cycle continues with the survivors.
 
-        changed = [rid for rid, e in emissions.items() if e.intervals > 0]
-        for rid in changed:
-            self.state.advance(rid, emissions[rid].new_watermark, emissions[rid].added_wh)
+        # Persist every fetched resource, not only those with new energy:
+        # the frontier and ledger can move on their own when a gap is
+        # abandoned past the heal horizon (intervals == 0, watermark still
+        # advances), and that movement must survive a crash.
+        for rid, e in emissions.items():
+            self.state.advance(rid, e.new_watermark, e.new_emitted, e.added_wh)
         self.state.save()
+
+        # The sensor state topic carries the cumulative total, so it only
+        # needs republishing when new windows were folded in this cycle.
+        changed = [rid for rid, e in emissions.items() if e.intervals > 0]
 
         self.last_success = now
         self.consecutive_failures = 0
@@ -1083,19 +1179,29 @@ class Bridge:
     def _fetch_resource(self, rid: str, now: datetime) -> Emission:
         entry = self.state.resource(rid)
         watermark = floor_half_hour(self.state.watermark(rid))
+        emitted = self.state.emitted(rid)
         self.client.catchup(rid)
         readings: list[Reading] = []
+        # Refetch from the frontier every cycle: windows in the ledger above
+        # it are recognised and skipped, so this is how a gap left behind
+        # earlier gets a chance to arrive and heal.
         for start, end in fetch_windows(watermark, now):
             readings.extend(self.client.get_readings(rid, start, end))
         emission = select_emittable(
-            readings, watermark, now, self.cfg.schedule.finalisation_lag
+            readings,
+            watermark,
+            emitted,
+            now,
+            self.cfg.schedule.finalisation_lag,
+            self.cfg.schedule.heal_horizon,
         )
         log.debug(
-            "resource %s (%s): %d interval(s) emitted, watermark %s",
+            "resource %s (%s): %d interval(s) emitted, frontier %s, ledger %d ahead",
             rid,
             entry.get("classifier", "?") if entry else "?",
             emission.intervals,
             emission.new_watermark.isoformat(),
+            len(emission.new_emitted),
         )
         return emission
 
@@ -1129,37 +1235,37 @@ class Bridge:
         )
         return datetime.fromtimestamp(ts, tz=UTC)
 
+    def _status_base(
+        self, now: datetime, next_planned: datetime | None
+    ) -> dict[str, Any]:
+        """Fields common to the resource and bridge status payloads."""
+        return {
+            "schema": STATUS_SCHEMA,
+            "last_success": _iso_or_empty(self.last_success),
+            "next_planned_update": (
+                next_planned or self.next_planned(now)
+            ).isoformat(),
+            "consecutive_failures": self.consecutive_failures,
+            "bridge_version": VERSION,
+        }
+
     def _resource_status(
         self, rid: str, now: datetime, next_planned: datetime | None = None
     ) -> str:
         entry = self.state.resource(rid) or {}
-        return json.dumps(
-            {
-                "schema": STATUS_SCHEMA,
-                "data_complete_to": entry.get("watermark", ""),
-                "cumulative_kwh": round(int(entry.get("cumulative_wh", 0)) / 1000, 3),
-                "last_success": _iso_or_empty(self.last_success),
-                "next_planned_update": (next_planned or self.next_planned(now)).isoformat(),
-                "consecutive_failures": self.consecutive_failures,
-                "bridge_version": VERSION,
-            },
-            sort_keys=True,
+        payload = self._status_base(now, next_planned)
+        payload["data_complete_to"] = entry.get("watermark", "")
+        payload["cumulative_kwh"] = round(
+            int(entry.get("cumulative_wh", 0)) / 1000, 3
         )
+        return json.dumps(payload, sort_keys=True)
 
     def _bridge_status(
         self, now: datetime, next_planned: datetime | None = None
     ) -> str:
-        return json.dumps(
-            {
-                "schema": STATUS_SCHEMA,
-                "last_success": _iso_or_empty(self.last_success),
-                "next_planned_update": (next_planned or self.next_planned(now)).isoformat(),
-                "consecutive_failures": self.consecutive_failures,
-                "resources": self.state.resource_ids(),
-                "bridge_version": VERSION,
-            },
-            sort_keys=True,
-        )
+        payload = self._status_base(now, next_planned)
+        payload["resources"] = self.state.resource_ids()
+        return json.dumps(payload, sort_keys=True)
 
     def _print_dry_run(self, emissions: dict[str, Emission]) -> None:
         for rid, emission in emissions.items():

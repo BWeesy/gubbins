@@ -55,12 +55,17 @@ def write_config(tmp_path: Path, text: str) -> Path:
     return path
 
 
+def load_cfg(tmp_path: Path, text: str, env: dict | None = None) -> gb.Config:
+    return gb.load_config(write_config(tmp_path, text), environ=env or {})
+
+
 class TestConfig:
     def test_minimal_config_loads_with_defaults(self, tmp_path):
-        cfg = gb.load_config(write_config(tmp_path, MINIMAL_CONFIG), environ={})
+        cfg = load_cfg(tmp_path, MINIMAL_CONFIG)
         assert cfg.glowmarkt.username == "user@example.com"
         assert cfg.schedule.interval == 1800
         assert cfg.schedule.finalisation_lag == 5400
+        assert cfg.schedule.heal_horizon == 604800
         assert cfg.retry.auth_floor == 3600
         assert cfg.mqtt.port == 1883
         assert cfg.mqtt.qos == 1
@@ -70,27 +75,27 @@ class TestConfig:
     def test_unknown_key_fails_with_path(self, tmp_path):
         text = MINIMAL_CONFIG + "\n[schedule]\njiter = 300\n"
         with pytest.raises(gb.ConfigError, match="schedule.jiter"):
-            gb.load_config(write_config(tmp_path, text), environ={})
+            load_cfg(tmp_path, text)
 
     def test_unknown_section_fails(self, tmp_path):
         text = MINIMAL_CONFIG + "\n[schedle]\ninterval = 600\n"
         with pytest.raises(gb.ConfigError, match="schedle"):
-            gb.load_config(write_config(tmp_path, text), environ={})
+            load_cfg(tmp_path, text)
 
     def test_wrong_type_fails(self, tmp_path):
         text = MINIMAL_CONFIG + "\n[schedule]\ninterval = \"30m\"\n"
         with pytest.raises(gb.ConfigError, match="schedule.interval"):
-            gb.load_config(write_config(tmp_path, text), environ={})
+            load_cfg(tmp_path, text)
 
     def test_bool_is_not_int(self, tmp_path):
         text = MINIMAL_CONFIG + "\n[schedule]\ninterval = true\n"
         with pytest.raises(gb.ConfigError, match="boolean"):
-            gb.load_config(write_config(tmp_path, text), environ={})
+            load_cfg(tmp_path, text)
 
     def test_missing_credentials_fails(self, tmp_path):
         text = "[mqtt]\nhost = \"broker.local\"\n"
         with pytest.raises(gb.ConfigError, match="glowmarkt.username"):
-            gb.load_config(write_config(tmp_path, text), environ={})
+            load_cfg(tmp_path, text)
 
     def test_env_overrides_file_secrets(self, tmp_path):
         env = {
@@ -98,7 +103,7 @@ class TestConfig:
             gb.ENV_GLOW_PASSWORD: "env-pass",
             gb.ENV_MQTT_PASSWORD: "env-mqtt",
         }
-        cfg = gb.load_config(write_config(tmp_path, MINIMAL_CONFIG), environ=env)
+        cfg = load_cfg(tmp_path, MINIMAL_CONFIG, env)
         assert cfg.glowmarkt.username == "env@example.com"
         assert cfg.glowmarkt.password == "env-pass"
         assert cfg.mqtt.password == "env-mqtt"
@@ -109,30 +114,37 @@ class TestConfig:
             gb.ENV_GLOW_USERNAME: "env@example.com",
             gb.ENV_GLOW_PASSWORD: "env-pass",
         }
-        cfg = gb.load_config(write_config(tmp_path, text), environ=env)
+        cfg = load_cfg(tmp_path, text, env)
         assert cfg.glowmarkt.password == "env-pass"
 
     def test_unknown_schedule_key_rejected(self, tmp_path):
         text = MINIMAL_CONFIG + "\n[schedule]\ntimezone = \"Europe/London\"\n"
         with pytest.raises(gb.ConfigError, match="unknown configuration key"):
-            gb.load_config(write_config(tmp_path, text), environ={})
+            load_cfg(tmp_path, text)
 
     def test_interval_minimum_enforced(self, tmp_path):
         text = MINIMAL_CONFIG + "\n[schedule]\ninterval = 60\n"
         with pytest.raises(gb.ConfigError, match="minimum is 300"):
-            gb.load_config(write_config(tmp_path, text), environ={})
+            load_cfg(tmp_path, text)
+
+    def test_heal_horizon_must_exceed_finalisation_lag(self, tmp_path):
+        text = MINIMAL_CONFIG + (
+            "\n[schedule]\nfinalisation_lag = 5400\nheal_horizon = 5400\n"
+        )
+        with pytest.raises(gb.ConfigError, match="heal_horizon"):
+            load_cfg(tmp_path, text)
 
     def test_tls_cert_requires_key(self, tmp_path):
         text = MINIMAL_CONFIG + (
             "\n[mqtt.tls]\nenabled = true\nclient_cert = \"/a.pem\"\n"
         )
         with pytest.raises(gb.ConfigError, match="client_cert and client_key"):
-            gb.load_config(write_config(tmp_path, text), environ={})
+            load_cfg(tmp_path, text)
 
     def test_tls_options_without_enable_fail(self, tmp_path):
         text = MINIMAL_CONFIG + "\n[mqtt.tls]\nca_cert = \"/ca.pem\"\n"
         with pytest.raises(gb.ConfigError, match="tls.enabled is false"):
-            gb.load_config(write_config(tmp_path, text), environ={})
+            load_cfg(tmp_path, text)
 
     def test_secretful_readable_config_warns(self, tmp_path, caplog):
         path = write_config(tmp_path, MINIMAL_CONFIG)
@@ -231,59 +243,127 @@ def make_readings(start: datetime, values: list[float | None]) -> list[gb.Readin
     return out
 
 
+# A horizon large enough that no window is ever abandoned; tests that care
+# about abandonment pass their own small value.
+NEVER_HEAL = int(timedelta(days=3650).total_seconds())
+
+
+def emit(readings, watermark, now, lag=0, emitted=None, heal_horizon=NEVER_HEAL):
+    return gb.select_emittable(
+        readings, watermark, set(emitted or ()), now, lag, heal_horizon
+    )
+
+
 class TestSelectEmittable:
     WM = datetime(2026, 7, 20, 0, 0, tzinfo=UTC)
 
     def test_emits_contiguous_finalised_intervals(self):
         readings = make_readings(self.WM, [0.5, 0.25, 0.25])
         now = self.WM + 3 * HH + timedelta(seconds=5400)
-        e = gb.select_emittable(readings, self.WM, now, 5400)
+        e = emit(readings, self.WM, now, lag=5400)
         assert e.intervals == 3
         assert e.added_wh == 1000
         assert e.new_watermark == self.WM + 3 * HH
+        assert e.new_emitted == set()  # contiguous: ledger stays empty
 
     def test_finalisation_lag_holds_back_recent_intervals(self):
         readings = make_readings(self.WM, [0.5, 0.25, 0.25])
         now = self.WM + 3 * HH  # third interval just ended; lag not met
-        e = gb.select_emittable(readings, self.WM, now, 5400)
+        e = emit(readings, self.WM, now, lag=5400)
         assert e.intervals == 0
         assert e.new_watermark == self.WM
 
-    def test_gap_halts_advancement(self):
+    def test_gap_does_not_halt_emission_but_holds_frontier(self):
+        # The window after the gap is emitted immediately (into the ledger),
+        # but the contiguous frontier stays at the gap until it heals.
         readings = make_readings(self.WM, [0.5, None, 0.25, 0.25])
         now = self.WM + 10 * HH
-        e = gb.select_emittable(readings, self.WM, now, 0)
-        assert e.intervals == 1
-        assert e.added_wh == 500
-        assert e.new_watermark == self.WM + HH
+        e = emit(readings, self.WM, now)
+        assert e.intervals == 3
+        assert e.added_wh == 1000  # 500 + 250 + 250, gap excluded
+        assert e.new_watermark == self.WM + HH  # frontier held at the gap
+        assert e.new_emitted == {self.WM + 2 * HH, self.WM + 3 * HH}
+
+    def test_late_arrival_heals_exactly_once_across_cycles(self):
+        # Cycle 1: a gap at WM+HH; windows either side are emitted and the
+        # one above the gap goes into the ledger.
+        first = emit(make_readings(self.WM, [0.5, None, 0.3]), self.WM,
+                     self.WM + 3 * HH)
+        assert first.intervals == 2
+        assert first.added_wh == 800
+        assert first.new_watermark == self.WM + HH
+        assert first.new_emitted == {self.WM + 2 * HH}
+
+        # Cycle 2: the missing window finally arrives. It is emitted, the
+        # frontier sweeps the whole contiguous region and the ledger drains.
+        # The already-emitted WM+2HH is NOT counted again.
+        second = emit(
+            make_readings(self.WM, [0.5, 0.4, 0.3]),
+            first.new_watermark,
+            self.WM + 3 * HH,
+            emitted=first.new_emitted,
+        )
+        assert second.intervals == 1  # only the healed window
+        assert second.added_wh == 400  # exactly-once: 0.4 kWh, not the 0.3 again
+        assert second.new_watermark == self.WM + 3 * HH
+        assert second.new_emitted == set()
+        # Total across both cycles equals the sum of every window, once each.
+        assert first.added_wh + second.added_wh == 500 + 400 + 300
+
+    def test_gap_abandoned_once_past_heal_horizon(self):
+        # The gap at WM is older than the horizon, so the frontier steps over
+        # it (accepting the lost half-hour) rather than stalling forever.
+        readings = make_readings(self.WM, [None, 0.1, 0.1, 0.1, 0.1])
+        now = self.WM + 5 * HH
+        e = emit(readings, self.WM, now, heal_horizon=int(4 * HH.total_seconds()))
+        assert e.intervals == 4
+        assert e.added_wh == 400
+        assert e.new_watermark == self.WM + 5 * HH  # swept past the abandoned gap
+        assert e.new_emitted == set()
+
+    def test_gap_within_horizon_is_not_abandoned(self):
+        # Same shape, but the gap is younger than the horizon: the frontier
+        # waits for it rather than abandoning it.
+        readings = make_readings(self.WM, [None, 0.1, 0.1, 0.1, 0.1])
+        now = self.WM + 5 * HH
+        e = emit(readings, self.WM, now, heal_horizon=int(100 * HH.total_seconds()))
+        assert e.new_watermark == self.WM  # frontier held at the gap
+        assert e.new_emitted == {
+            self.WM + HH, self.WM + 2 * HH, self.WM + 3 * HH, self.WM + 4 * HH
+        }
 
     def test_readings_behind_watermark_ignored(self):
         readings = make_readings(self.WM - 2 * HH, [9.9, 9.9, 0.5])
         now = self.WM + 5 * HH
-        e = gb.select_emittable(readings, self.WM, now, 0)
+        e = emit(readings, self.WM, now)
         assert e.intervals == 1
         assert e.added_wh == 500
+        assert e.new_watermark == self.WM + HH
 
     def test_no_readings_no_movement(self):
         now = self.WM + 5 * HH
-        e = gb.select_emittable([], self.WM, now, 0)
+        e = emit([], self.WM, now)
         assert e.intervals == 0
         assert e.added_wh == 0
         assert e.new_watermark == self.WM
+        assert e.new_emitted == set()
 
     def test_unsorted_input_handled(self):
+        # The ledger model is order-independent by construction; unsorted
+        # input must still emit each window exactly once.
         readings = list(reversed(make_readings(self.WM, [0.1, 0.2, 0.3])))
         now = self.WM + 10 * HH
-        e = gb.select_emittable(readings, self.WM, now, 0)
+        e = emit(readings, self.WM, now)
         assert e.intervals == 3
         assert e.added_wh == 600
+        assert e.new_watermark == self.WM + 3 * HH
 
     def test_rounding_accumulates_in_integer_wh(self):
         # 0.0005 kWh rounds to 1 Wh (banker's rounding is acceptable but the
         # accumulation must stay integral).
         readings = make_readings(self.WM, [0.0004, 0.0004])
         now = self.WM + 10 * HH
-        e = gb.select_emittable(readings, self.WM, now, 0)
+        e = emit(readings, self.WM, now)
         assert isinstance(e.added_wh, int)
         assert e.added_wh == 0
 
@@ -294,7 +374,7 @@ class TestSelectEmittable:
         day_start = datetime(2026, 3, 29, 0, 0, tzinfo=UTC)
         readings = make_readings(day_start, [0.1] * 46)
         now = day_start + timedelta(hours=23) + timedelta(hours=2)
-        e = gb.select_emittable(readings, day_start, now, 0)
+        e = emit(readings, day_start, now)
         assert e.intervals == 46
         assert e.new_watermark == datetime(2026, 3, 29, 23, 0, tzinfo=UTC)
 
@@ -303,7 +383,7 @@ class TestSelectEmittable:
         day_start = datetime(2026, 10, 24, 23, 0, tzinfo=UTC)
         readings = make_readings(day_start, [0.1] * 50)
         now = day_start + timedelta(hours=25) + timedelta(hours=2)
-        e = gb.select_emittable(readings, day_start, now, 0)
+        e = emit(readings, day_start, now)
         assert e.intervals == 50
         assert e.new_watermark == datetime(2026, 10, 26, 0, 0, tzinfo=UTC)
 
@@ -338,16 +418,46 @@ class TestStateFile:
     def test_round_trip(self, tmp_path):
         state = gb.StateFile(tmp_path)
         wm = datetime(2026, 7, 20, 0, 0, tzinfo=UTC)
+        ledger = {wm + 2 * HH, wm + 3 * HH}
         state.upsert_resource("res-1", "electricity.consumption", "Elec", wm)
-        state.advance("res-1", wm + HH, 500)
+        state.advance("res-1", wm + HH, ledger, 500)
         state.set_token("secret-token", datetime.now(tz=UTC))
         state.save()
 
         reloaded = gb.StateFile(tmp_path)
         reloaded.load()
         assert reloaded.watermark("res-1") == wm + HH
+        assert reloaded.emitted("res-1") == ledger
         assert reloaded.cumulative_wh("res-1") == 500
         assert reloaded.token == "secret-token"
+
+    def test_v1_state_migrates_to_v2(self, tmp_path):
+        # A v1 file (no per-resource ledger) must upgrade in place, keeping
+        # its cumulative total so no spurious meter-reset is emitted, and
+        # gain an empty ledger (a v1 watermark had nothing emitted above it).
+        wm = datetime(2026, 7, 20, 0, 0, tzinfo=UTC)
+        v1 = {
+            "schema": 1,
+            "auth": {"token": "t", "obtained_at": "", "last_attempt_at": ""},
+            "resources": {
+                "res-1": {
+                    "classifier": "electricity.consumption",
+                    "name": "Elec",
+                    "watermark": wm.isoformat(),
+                    "cumulative_wh": 1234,
+                }
+            },
+        }
+        state = gb.StateFile(tmp_path)
+        state.path.parent.mkdir(parents=True, exist_ok=True)
+        state.path.write_text(json.dumps(v1), encoding="utf-8")
+        state.load()
+
+        assert state.data["schema"] == 2
+        assert state.watermark("res-1") == wm
+        assert state.emitted("res-1") == set()
+        assert state.cumulative_wh("res-1") == 1234
+        assert state.token == "t"
 
     def test_corrupt_state_starts_fresh(self, tmp_path, caplog):
         state = gb.StateFile(tmp_path)
@@ -464,13 +574,23 @@ class FakePublisher:
     def topics(self):
         return [t for t, _, _ in self.published]
 
+    def payloads(self, topic):
+        """Every payload published to *topic*, in order."""
+        return [p for t, p, _ in self.published if t == topic]
+
+    def payload(self, topic):
+        """The most recent payload published to *topic*."""
+        return self.payloads(topic)[-1]
+
 
 def make_bridge(tmp_path, client, publisher, **cfg_overrides):
     cfg = gb.Config(
         glowmarkt=gb.GlowmarktConfig(
             username="u", password="p", **cfg_overrides.get("glowmarkt", {})
         ),
-        schedule=gb.ScheduleConfig(finalisation_lag=0),
+        schedule=gb.ScheduleConfig(
+            finalisation_lag=0, **cfg_overrides.get("schedule", {})
+        ),
         retry=gb.RetryConfig(auth_floor=0),
     )
     state = gb.StateFile(tmp_path)
@@ -480,6 +600,12 @@ def make_bridge(tmp_path, client, publisher, **cfg_overrides):
 
 class TestCycle:
     WM = datetime(2026, 7, 19, 23, 0, tzinfo=UTC)  # arbitrary fixed watermark
+
+    @pytest.fixture(autouse=True)
+    def _fixed_seed(self, monkeypatch):
+        """Pin the fresh-state seed so cycles start from a known watermark
+        instead of 24 hours before wall-clock now."""
+        monkeypatch.setattr(gb, "initial_watermark", lambda now: self.WM)
 
     def _client_with_data(self):
         readings = make_readings(self.WM, [0.5, 0.25, 0.25, 0.5])
@@ -499,10 +625,7 @@ class TestCycle:
             ],
         )
 
-    def test_first_cycle_discovers_emits_and_publishes(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            gb, "initial_watermark", lambda now: self.WM
-        )
+    def test_first_cycle_discovers_emits_and_publishes(self, tmp_path):
         client = self._client_with_data()
         publisher = FakePublisher()
         bridge, state = make_bridge(tmp_path, client, publisher)
@@ -519,20 +642,14 @@ class TestCycle:
         assert "glow/res-elec/status" in topics
         assert "glow/bridge/status" in topics
 
-        state_payload = next(
-            p for t, p, _ in publisher.published if t == "glow/res-elec/state"
-        )
-        assert state_payload == "1.500"
+        assert publisher.payload("glow/res-elec/state") == "1.500"
 
-        status_payload = json.loads(
-            next(p for t, p, _ in publisher.published if t == "glow/res-elec/status")
-        )
-        assert status_payload["cumulative_kwh"] == 1.5
-        assert status_payload["data_complete_to"] == (self.WM + 4 * HH).isoformat()
-        assert status_payload["consecutive_failures"] == 0
+        status = json.loads(publisher.payload("glow/res-elec/status"))
+        assert status["cumulative_kwh"] == 1.5
+        assert status["data_complete_to"] == (self.WM + 4 * HH).isoformat()
+        assert status["consecutive_failures"] == 0
 
-    def test_second_cycle_emits_only_new_intervals(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(gb, "initial_watermark", lambda now: self.WM)
+    def test_second_cycle_emits_only_new_intervals(self, tmp_path):
         client = self._client_with_data()
         publisher = FakePublisher()
         bridge, state = make_bridge(tmp_path, client, publisher)
@@ -545,13 +662,9 @@ class TestCycle:
         )
         bridge.run_cycle(self.WM + 5 * HH)
         assert state.cumulative_wh("res-elec") == 2500
-        state_payloads = [
-            p for t, p, _ in publisher.published if t == "glow/res-elec/state"
-        ]
-        assert state_payloads == ["2.500"]
+        assert publisher.payloads("glow/res-elec/state") == ["2.500"]
 
-    def test_no_new_data_publishes_status_not_state(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(gb, "initial_watermark", lambda now: self.WM)
+    def test_no_new_data_publishes_status_not_state(self, tmp_path):
         client = self._client_with_data()
         publisher = FakePublisher()
         bridge, state = make_bridge(tmp_path, client, publisher)
@@ -564,8 +677,7 @@ class TestCycle:
         assert "glow/res-elec/state" not in topics
         assert "glow/res-elec/status" in topics
 
-    def test_state_written_before_publish(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(gb, "initial_watermark", lambda now: self.WM)
+    def test_state_written_before_publish(self, tmp_path):
         client = self._client_with_data()
 
         class ExplodingPublisher(FakePublisher):
@@ -580,8 +692,38 @@ class TestCycle:
         reloaded.load()
         assert reloaded.cumulative_wh("res-elec") == 1500
 
-    def test_token_expiry_reauths_once_and_continues(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(gb, "initial_watermark", lambda now: self.WM)
+    def test_abandoned_gap_advance_is_persisted(self, tmp_path):
+        # A cycle can move the frontier without emitting anything, when a gap
+        # ages past the heal horizon. That advance must reach disk: if only
+        # resources with new energy were persisted, the abandonment would be
+        # recomputed every cycle and the frontier would never settle.
+        client = FakeClient(
+            resources=[
+                {
+                    "resourceId": "res-elec",
+                    "classifier": "electricity.consumption",
+                    "name": "elec",
+                }
+            ]
+        )  # no readings at all: nothing is emittable
+        bridge, state = make_bridge(
+            tmp_path,
+            client,
+            FakePublisher(),
+            schedule={"heal_horizon": int(2 * HH.total_seconds())},
+        )
+
+        bridge.run_cycle(self.WM + 10 * HH)
+
+        # Everything up to now-heal_horizon is written off; nothing emitted.
+        assert state.cumulative_wh("res-elec") == 0
+        assert state.watermark("res-elec") == self.WM + 8 * HH
+
+        reloaded = gb.StateFile(tmp_path)
+        reloaded.load()
+        assert reloaded.watermark("res-elec") == self.WM + 8 * HH
+
+    def test_token_expiry_reauths_once_and_continues(self, tmp_path):
         client = self._client_with_data()
         client.fail_readings = [gb.TokenExpired()]
         publisher = FakePublisher()
@@ -592,8 +734,7 @@ class TestCycle:
         assert client.auth_calls == 1
         assert state.cumulative_wh("res-elec") == 1500
 
-    def test_pinned_resource_404_is_fatal(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(gb, "initial_watermark", lambda now: self.WM)
+    def test_pinned_resource_404_is_fatal(self, tmp_path):
         client = FakeClient()
         client.fail_readings = [gb.ResourceMissing("res-pinned")]
         publisher = FakePublisher()
@@ -606,8 +747,7 @@ class TestCycle:
         with pytest.raises(gb.CycleError, match="pinned resource"):
             bridge.run_cycle(self.WM + 4 * HH)
 
-    def test_cached_resource_404_triggers_rediscovery(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(gb, "initial_watermark", lambda now: self.WM)
+    def test_cached_resource_404_triggers_rediscovery(self, tmp_path):
         client = self._client_with_data()
         publisher = FakePublisher()
         bridge, state = make_bridge(tmp_path, client, publisher)

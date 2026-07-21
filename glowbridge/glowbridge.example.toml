@@ -26,6 +26,10 @@ jitter = 300
 # Only intervals older than this many seconds are published. Guards
 # against DCC revisions to freshly delivered data.
 finalisation_lag = 5400
+# How long a missing half-hour is waited on before the completeness
+# frontier steps over it (losing that one window) so it cannot stall
+# forever. Must exceed finalisation_lag. Default is 7 days.
+heal_horizon = 604800
 
 [retry]
 # In-cycle retry budget; when exhausted the cycle is skipped, not fatal.

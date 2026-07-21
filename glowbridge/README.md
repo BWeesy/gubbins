@@ -44,22 +44,31 @@ data; publishing only settled intervals is what makes the cumulative total
 safe for `state_class: total_increasing`. Later revisions to already
 published intervals are not tracked.
 
-**Gaps halt, never skip.** Intervals are folded into the total strictly in
-order. If a half-hour is missing from the API response, the watermark
-holds there — even when later intervals are present — because advancing
-past a gap would exclude that half-hour from the total forever. Late
-deliveries are picked up by a subsequent cycle and the total self-heals.
+**Exactly-once emission with a completeness frontier.** Each finalised
+half-hour is folded into the cumulative total exactly once. The bridge
+keeps two things per meter: a *frontier* — the point up to which every
+window is accounted for — and a *ledger* of individual windows already
+emitted above it. Any finalised window not already in the ledger is emitted
+the moment it is seen, in whatever order the DCC delivers it, so a missing
+half-hour does not hold back the ones after it. The frontier advances only
+across an unbroken run of accounted-for windows and is published as
+`data_complete_to`, so that value always means "everything up to here is
+in". A window absent from one poll is emitted on a later poll once it
+arrives, and the frontier catches up then. A window the DCC never delivers
+is written off after `schedule.heal_horizon` (default 7 days), so a
+permanent hole cannot pin the frontier in place. The total only ever
+increases.
 
-**The state file is the single source of truth.** The watermark (how far
-the data is complete), the cumulative total, the auth token and the
-discovered resource cache live in one JSON file, written atomically,
-before anything is published. A crash between write and publish produces
-a gap, never a double-count. The retained MQTT status topics carry a copy
-of this state for observability only: the bridge subscribes to nothing
-and never recovers state from the broker. Contributions adding
-recover-from-broker logic will be declined; a stale retained watermark
-silently skipping data is precisely the failure class this design
-removes.
+**The state file is the single source of truth.** The completeness
+frontier and emitted-window ledger, the cumulative total, the auth token
+and the discovered resource cache live in one JSON file, written
+atomically, before anything is published. A crash between write and
+publish produces a gap, never a double-count. The retained MQTT status
+topics carry a copy of this state for observability only: the bridge
+subscribes to nothing and never recovers state from the broker.
+Contributions adding recover-from-broker logic will be declined; a stale
+retained frontier silently skipping data is precisely the failure class
+this design removes.
 
 **Deterministic schedule jitter.** Each install polls at a fixed offset
 past the interval boundary, derived from the machine ID. A given install
@@ -123,7 +132,7 @@ $EDITOR ~/.config/glowbridge/glowbridge.toml   # credentials, mqtt.host
 ```
 
 On first run the bridge discovers your consumption resources, seeds each
-watermark 24 hours before the current time, and publishes a cumulative
+frontier 24 hours before the current time, and publishes a cumulative
 total covering that first day of catch-up. Home Assistant discovery
 entities appear after the first successful cycle; add the consumption
 sensors to the Energy dashboard as grid consumption. Statistics accrue
@@ -174,9 +183,11 @@ uv run test_glowbridge.py     # or: pytest test_glowbridge.py
 ruff check glowbridge.py test_glowbridge.py
 ```
 
-The test suite concentrates on the places the subtle bugs live: DST
-transition days (23- and 25-hour days), gap handling, emission
-monotonicity, config validation and crash-ordering. There are no live-API
+The test suite concentrates on the places the subtle bugs live:
+exactly-once emission (out-of-order arrival, gap healing across cycles,
+write-off past the heal horizon), DST transition days (23- and 25-hour
+days), state-file migration, config validation, and crash-ordering. The
+network and the broker are exercised through fakes; there are no live-API
 tests and none should be added.
 
 Two things are treated as ABI once released: the MQTT topic layout
