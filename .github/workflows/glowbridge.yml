@@ -1,0 +1,58 @@
+name: glowbridge
+
+on:
+  push:
+    paths:
+      - 'glowbridge/**'
+      - '.github/workflows/glowbridge.yml'
+  pull_request:
+    paths:
+      - 'glowbridge/**'
+      - '.github/workflows/glowbridge.yml'
+  schedule:
+    # Pinned dependencies do not change, but advisories against them do.
+    # Re-audit weekly so a newly published CVE surfaces on its own rather
+    # than waiting for somebody to push.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: glowbridge
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Ruff is pinned: an unpinned lint can start failing CI on an
+      # unrelated push purely because a new release added a rule.
+      - name: Lint
+        run: uvx ruff@0.15.22 check glowbridge.py test_glowbridge.py
+
+      # --locked fails if the lockfile and the PEP 723 inline metadata have
+      # drifted, so this doubles as the "did you forget to re-lock?" gate.
+      - name: Tests
+        run: uv run --locked --script test_glowbridge.py
+
+      - name: Daemon lockfile is current
+        run: uv run --locked --script glowbridge.py --version
+
+      # Audit the exact resolved dependency set from each lockfile. Exported
+      # with hashes so pip-audit verifies integrity as well as advisories.
+      # pip-audit exits non-zero on a finding, which fails the build by design.
+      - name: Audit dependencies
+        run: |
+          uv export --script glowbridge.py --format requirements-txt > "${RUNNER_TEMP}/glowbridge-requirements.txt"
+          uv export --script test_glowbridge.py --format requirements-txt > "${RUNNER_TEMP}/test-requirements.txt"
+          uvx pip-audit -r "${RUNNER_TEMP}/glowbridge-requirements.txt"
+          uvx pip-audit -r "${RUNNER_TEMP}/test-requirements.txt"

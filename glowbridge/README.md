@@ -179,9 +179,21 @@ mosquitto_sub -v -t 'glow/#'
 ## Development
 
 ```sh
-uv run test_glowbridge.py     # or: pytest test_glowbridge.py
-ruff check glowbridge.py test_glowbridge.py
+uv run --locked --script test_glowbridge.py    # tests; --locked also catches lock drift
+uvx ruff check glowbridge.py test_glowbridge.py
+
+# Dependencies are pinned in glowbridge.py.lock / test_glowbridge.py.lock.
+# Re-lock after changing the PEP 723 metadata, or --locked runs will fail:
+uv lock --script glowbridge.py
+
+# Audit the pinned set for known advisories (OWASP A06):
+uv export --script glowbridge.py --format requirements-txt > /tmp/req.txt
+uvx pip-audit -r /tmp/req.txt
 ```
+
+CI (`.github/workflows/glowbridge.yml`) runs all of the above on every push
+touching `glowbridge/`, and re-runs the audit weekly on a schedule — pinned
+dependencies never change, but advisories against them do.
 
 The test suite concentrates on the places the subtle bugs live:
 exactly-once emission (out-of-order arrival, gap healing across cycles,
