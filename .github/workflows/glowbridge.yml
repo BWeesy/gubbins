@@ -27,12 +27,18 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        # Pinned exact: setup-uv does not publish a moving major tag for the
+        # current release. Runs on Node 24.
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
+          # This project pins deps in per-script PEP 723 lockfiles, not
+          # uv.lock/requirements.txt, so the cache key must track those or it
+          # never invalidates.
+          cache-dependency-glob: '**/*.py.lock'
 
       # Ruff is pinned: an unpinned lint can start failing CI on an
       # unrelated push purely because a new release added a rule.
