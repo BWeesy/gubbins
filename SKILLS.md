@@ -14,7 +14,7 @@ glowbridge/       the bridge (single-file app + its tests and docs)
   CONFIG.md               normative config reference — keep in lockstep with code
   README.md               design rationale and troubleshooting
   glowbridge.example.toml annotated example config
-dev_scripts/      one-off exploration tools, not part of the shipped app
+  dev_scripts/            one-off exploration tools, not part of the shipped app
 .github/          CI workflows and issue templates
 ```
 
@@ -214,7 +214,11 @@ sensors are deliberately excluded. A NixOS module is planned but deferred.
 
 ## dev_scripts
 
-`dev_scripts/` holds one-off exploration tools, not shipped code. They may
-import `glowbridge` as a library to reuse its config loader, auth client and
-redacting logger. `dev_scripts/*.json` is gitignored: these tools dump raw
-personal consumption data, which must never be committed.
+`glowbridge/dev_scripts/` holds one-off exploration tools, not shipped code.
+They live under `glowbridge/` because they target the bridge, and they import
+`glowbridge` as a library (via `Path(__file__).resolve().parent.parent`) to
+reuse its config loader, auth client and redacting logger.
+`glowbridge/dev_scripts/*.json` is gitignored: these tools dump raw personal
+consumption data, which must never be committed. They carry their own PEP 723
+metadata and lockfile like the bridge scripts, and CI lints and lock-checks
+them alongside the bridge.

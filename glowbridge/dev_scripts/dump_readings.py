@@ -24,7 +24,7 @@ Usage:
     uv run --script dump_readings.py --from 2026-07-19T00:00 --to 2026-07-21
     uv run --script dump_readings.py --from 2026-07-19 --resource <id> --all
 
-The output file (default dev_scripts/glow_dump.json) is gitignored.
+The output file (default glowbridge/dev_scripts/glow_dump.json) is gitignored.
 """
 
 from __future__ import annotations
@@ -39,8 +39,10 @@ from pathlib import Path
 import requests
 
 # Import the bridge as a library, the same way the test suite does, so this
-# script tracks the one true API contract rather than duplicating it.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "glowbridge"))
+# script tracks the one true API contract rather than duplicating it. The
+# parent directory is the glowbridge package folder (this lives in
+# glowbridge/dev_scripts/).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import glowbridge as gb
 

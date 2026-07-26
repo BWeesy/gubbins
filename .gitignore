@@ -223,4 +223,4 @@ glowbridge.toml
 state.json
 
 # dev_scripts: raw API dumps are personal consumption data, not committed.
-dev_scripts/*.json
+glowbridge/dev_scripts/*.json
