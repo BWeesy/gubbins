@@ -87,7 +87,7 @@ topics and an MQTT Last Will:
 
 | Condition | Signal |
 |---|---|
-| Bridge process dead | `glow/bridge/availability` → `offline` (LWT) |
+| Bridge process dead | `glowbridge/bridge/availability` → `offline` (LWT) |
 | Bridge alive, API failing | `consecutive_failures` > 0, `next_planned_update` pushed out |
 | Bridge and API fine, DCC feed stale | `last_success` recent but `data_complete_to` old |
 
@@ -143,13 +143,13 @@ is deliberately out of scope.
 
 | Topic | Retained | Payload |
 |---|---|---|
-| `glow/{resource_id}/state` | no | cumulative kWh, 3 decimal places |
-| `glow/{resource_id}/status` | yes | JSON: `data_complete_to`, `cumulative_kwh`, `last_success`, `next_planned_update`, `consecutive_failures`, `bridge_version` |
-| `glow/bridge/availability` | yes | `online` / `offline` (Last Will) |
-| `glow/bridge/status` | yes | JSON: bridge-level summary |
+| `glowbridge/{resource_id}/state` | no | cumulative kWh, 3 decimal places |
+| `glowbridge/{resource_id}/status` | yes | JSON: `data_complete_to`, `cumulative_kwh`, `last_success`, `next_planned_update`, `consecutive_failures`, `bridge_version` |
+| `glowbridge/bridge/availability` | yes | `online` / `offline` (Last Will) |
+| `glowbridge/bridge/status` | yes | JSON: bridge-level summary |
 | `homeassistant/sensor/glowbridge_{id}/config` | yes | HA discovery |
 
-`glow` is `mqtt.topic_prefix`. The per-resource status topic doubles as
+`glowbridge` is `mqtt.topic_prefix`. The per-resource status topic doubles as
 the sensor's `json_attributes_topic`, so `data_complete_to` and friends
 are visible as entity attributes in Home Assistant without extra
 configuration.
@@ -159,7 +159,7 @@ configuration.
 Start with one question: **is it the bridge, or is it the DCC?**
 
 ```sh
-mosquitto_sub -v -t 'glow/#'
+mosquitto_sub -v -t 'glowbridge/#'
 ```
 
 - `availability` is `offline` → the process is dead. Check the service.

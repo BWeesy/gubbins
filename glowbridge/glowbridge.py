@@ -119,7 +119,7 @@ class MqttConfig:
     username: str = ""
     password: str = ""
     client_id: str = "glowbridge"
-    topic_prefix: str = "glow"
+    topic_prefix: str = "glowbridge"
     discovery_prefix: str = "homeassistant"
     qos: int = 1
     tls: TlsConfig = dataclasses.field(default_factory=TlsConfig)

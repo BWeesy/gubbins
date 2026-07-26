@@ -64,7 +64,7 @@ body:
     attributes:
       label: Retained MQTT status topics
       description: >-
-        Run `mosquitto_sub -v -t 'glow/#'` (Ctrl+C after a few seconds) and
+        Run `mosquitto_sub -v -t 'glowbridge/#'` (Ctrl+C after a few seconds) and
         paste the lines for these retained topics — they carry the triage
         information:
 
@@ -73,7 +73,7 @@ body:
           - `<prefix>/<resource_id>/status` — per-meter JSON: `data_complete_to`,
             `last_success`, `next_planned_update`, `consecutive_failures`
 
-        `<prefix>` is your `mqtt.topic_prefix` (default `glow`). The
+        `<prefix>` is your `mqtt.topic_prefix` (default `glowbridge`). The
         `<prefix>/<resource_id>/state` topic is **not** retained, so it will not
         appear here — that is expected, not the problem.
       render: text

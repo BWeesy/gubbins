@@ -49,7 +49,7 @@ password = ""               # or GLOWBRIDGE_MQTT_PASSWORD
 client_id = "glowbridge"
 # Topic layout: {topic_prefix}/{resource_id}/state and /status, plus
 # {topic_prefix}/bridge/availability and /status.
-topic_prefix = "glow"
+topic_prefix = "glowbridge"
 # Home Assistant MQTT discovery prefix; match HA's configuration.
 discovery_prefix = "homeassistant"
 qos = 1

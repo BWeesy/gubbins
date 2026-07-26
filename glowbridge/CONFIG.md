@@ -150,7 +150,7 @@ from `GLOWBRIDGE_MQTT_PASSWORD` and is included in the log redaction set.
 MQTT client identifier. Must be unique per broker; change it when running
 multiple instances (e.g. one per Bright account) against one broker.
 
-### `topic_prefix` — string, default `"glow"`
+### `topic_prefix` — string, default `"glowbridge"`
 Root of the topic layout: `{prefix}/{resource_id}/state`,
 `{prefix}/{resource_id}/status`, `{prefix}/bridge/availability`,
 `{prefix}/bridge/status`. Must be non-empty and contain no `#` or `+`.

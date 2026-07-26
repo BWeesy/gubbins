@@ -639,13 +639,13 @@ class TestCycle:
         assert state.watermark("res-elec") == self.WM + 4 * HH
 
         topics = publisher.topics()
-        assert "glow/res-elec/state" in topics
-        assert "glow/res-elec/status" in topics
-        assert "glow/bridge/status" in topics
+        assert "glowbridge/res-elec/state" in topics
+        assert "glowbridge/res-elec/status" in topics
+        assert "glowbridge/bridge/status" in topics
 
-        assert publisher.payload("glow/res-elec/state") == "1.500"
+        assert publisher.payload("glowbridge/res-elec/state") == "1.500"
 
-        status = json.loads(publisher.payload("glow/res-elec/status"))
+        status = json.loads(publisher.payload("glowbridge/res-elec/status"))
         assert status["cumulative_kwh"] == 1.5
         assert status["data_complete_to"] == (self.WM + 4 * HH).isoformat()
         assert status["consecutive_failures"] == 0
@@ -663,7 +663,7 @@ class TestCycle:
         )
         bridge.run_cycle(self.WM + 5 * HH)
         assert state.cumulative_wh("res-elec") == 2500
-        assert publisher.payloads("glow/res-elec/state") == ["2.500"]
+        assert publisher.payloads("glowbridge/res-elec/state") == ["2.500"]
 
     def test_no_new_data_publishes_status_not_state(self, tmp_path):
         client = self._client_with_data()
@@ -675,8 +675,8 @@ class TestCycle:
         bridge.run_cycle(self.WM + 4 * HH)  # same now; nothing new
 
         topics = publisher.topics()
-        assert "glow/res-elec/state" not in topics
-        assert "glow/res-elec/status" in topics
+        assert "glowbridge/res-elec/state" not in topics
+        assert "glowbridge/res-elec/status" in topics
 
     def test_state_written_before_publish(self, tmp_path):
         client = self._client_with_data()
@@ -842,8 +842,8 @@ class TestDiscovery:
         assert body["state_class"] == "total_increasing"
         assert body["device_class"] == "energy"
         assert body["unit_of_measurement"] == "kWh"
-        assert body["state_topic"] == "glow/abc-123/state"
-        assert body["json_attributes_topic"] == "glow/abc-123/status"
+        assert body["state_topic"] == "glowbridge/abc-123/state"
+        assert body["json_attributes_topic"] == "glowbridge/abc-123/status"
         assert body["unique_id"] == "glowbridge_abc_123"
 
 
