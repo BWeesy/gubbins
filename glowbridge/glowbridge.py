@@ -53,7 +53,7 @@ from typing import Any
 
 import requests
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 GLOWMARKT_BASE_URL = "https://api.glowmarkt.com/api/v0-1"
 # Application ID published by Hildebrand for the Bright app. Overridable in
@@ -710,19 +710,32 @@ def select_emittable(
     # Sweep the contiguous frontier forward, draining ledger entries as it
     # passes them and stepping over gaps too old to keep waiting on.
     cursor = watermark
+    abandoned = 0
     while True:
         if cursor in emitted:
             emitted.discard(cursor)
             cursor += step
             continue
         if cursor + step <= cutoff and cursor < abandon_before:
-            log.warning(
-                "gap at %s exceeded heal horizon; abandoning window",
-                cursor.isoformat(),
-            )
+            abandoned += 1
             cursor += step
             continue
         break
+
+    # A single loud line per cycle, not one per window: abandoning finalised
+    # data is a permanent loss worth surfacing clearly, but a multi-day outage
+    # ageing out at once must not bury the log in hundreds of near-identical
+    # warnings. This is the "loud skip" the frontier relies on to never stall.
+    if abandoned:
+        log.warning(
+            "heal_horizon (%ds) exceeded: abandoned %d unfilled window(s) and"
+            " advanced the frontier from %s to %s; that consumption is"
+            " permanently excluded from the cumulative total",
+            heal_horizon,
+            abandoned,
+            watermark.isoformat(),
+            cursor.isoformat(),
+        )
 
     return Emission(
         new_watermark=cursor,

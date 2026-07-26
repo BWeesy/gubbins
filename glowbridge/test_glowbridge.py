@@ -311,16 +311,28 @@ class TestSelectEmittable:
         # Total across both cycles equals the sum of every window, once each.
         assert first.added_wh + second.added_wh == 500 + 400 + 300
 
-    def test_gap_abandoned_once_past_heal_horizon(self):
-        # The gap at WM is older than the horizon, so the frontier steps over
-        # it (accepting the lost half-hour) rather than stalling forever.
-        readings = make_readings(self.WM, [None, 0.1, 0.1, 0.1, 0.1])
-        now = self.WM + 5 * HH
-        e = emit(readings, self.WM, now, heal_horizon=int(4 * HH.total_seconds()))
+    def test_gaps_abandoned_past_heal_horizon_with_one_warning(self, caplog):
+        # Two gaps older than the horizon: the frontier steps over both
+        # (accepting the loss) rather than stalling, and the write-off is a
+        # SINGLE loud warning, not one line per abandoned window.
+        readings = make_readings(self.WM, [None, None, 0.1, 0.1, 0.1, 0.1])
+        now = self.WM + 6 * HH
+        with caplog.at_level("WARNING"):
+            e = emit(readings, self.WM, now, heal_horizon=int(4 * HH.total_seconds()))
         assert e.intervals == 4
         assert e.added_wh == 400
-        assert e.new_watermark == self.WM + 5 * HH  # swept past the abandoned gap
+        assert e.new_watermark == self.WM + 6 * HH  # swept past both abandoned gaps
         assert e.new_emitted == set()
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "abandoned 2 unfilled window" in warnings[0].getMessage()
+
+    def test_no_warning_when_nothing_abandoned(self, caplog):
+        readings = make_readings(self.WM, [0.5, 0.25, 0.25])
+        with caplog.at_level("WARNING"):
+            emit(readings, self.WM, self.WM + 3 * HH)
+        assert [r for r in caplog.records if r.levelname == "WARNING"] == []
 
     def test_gap_within_horizon_is_not_abandoned(self):
         # Same shape, but the gap is younger than the horizon: the frontier

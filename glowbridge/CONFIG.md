@@ -107,6 +107,11 @@ chronically slow feed more time to backfill at the cost of `data_complete_to`
 lagging longer before it gives up; lower it to advance the completeness
 signal sooner at the cost of writing off recoverable gaps.
 
+Abandonment is logged loudly: each cycle that writes windows off emits a
+single `WARNING` naming how many were abandoned and the frontier's old and
+new positions, so the permanent loss is visible without one log line per
+lost half-hour.
+
 ## `[retry]`
 
 Retries operate within a cycle. A cycle that exhausts its budget is
