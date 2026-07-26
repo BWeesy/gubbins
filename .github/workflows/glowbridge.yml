@@ -37,7 +37,7 @@ jobs:
       # Ruff is pinned: an unpinned lint can start failing CI on an
       # unrelated push purely because a new release added a rule.
       - name: Lint
-        run: uvx ruff@0.15.22 check glowbridge.py test_glowbridge.py
+        run: uvx ruff@0.15.22 check glowbridge.py test_glowbridge.py dev_scripts/dump_readings.py
 
       # --locked fails if the lockfile and the PEP 723 inline metadata have
       # drifted, so this doubles as the "did you forget to re-lock?" gate.
@@ -47,6 +47,14 @@ jobs:
       - name: Daemon lockfile is current
         run: uv run --locked --script glowbridge.py --version
 
+      # dev_scripts has no tests, so --help is the smoke test: it forces the
+      # locked env to build and the glowbridge import to resolve, and --locked
+      # is the lock-drift gate. Runs from the script's own dir so its lock is
+      # used (working-directory is relative to the repo root, not the default).
+      - name: Dev script lockfile is current
+        working-directory: glowbridge/dev_scripts
+        run: uv run --locked --script dump_readings.py --help
+
       # Audit the exact resolved dependency set from each lockfile. Exported
       # with hashes so pip-audit verifies integrity as well as advisories.
       # pip-audit exits non-zero on a finding, which fails the build by design.
@@ -54,5 +62,7 @@ jobs:
         run: |
           uv export --script glowbridge.py --format requirements-txt > "${RUNNER_TEMP}/glowbridge-requirements.txt"
           uv export --script test_glowbridge.py --format requirements-txt > "${RUNNER_TEMP}/test-requirements.txt"
+          uv export --script dev_scripts/dump_readings.py --format requirements-txt > "${RUNNER_TEMP}/dump-requirements.txt"
           uvx pip-audit -r "${RUNNER_TEMP}/glowbridge-requirements.txt"
           uvx pip-audit -r "${RUNNER_TEMP}/test-requirements.txt"
+          uvx pip-audit -r "${RUNNER_TEMP}/dump-requirements.txt"
