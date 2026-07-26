@@ -62,10 +62,20 @@ body:
   - type: textarea
     id: mqtt-status
     attributes:
-      label: Retained MQTT status
+      label: Retained MQTT status topics
       description: >-
-        Output of `mosquitto_sub -v -t 'glow/#'` (Ctrl+C after a few seconds).
-        Shows the frontier, failure count and availability in one go.
+        Run `mosquitto_sub -v -t 'glow/#'` (Ctrl+C after a few seconds) and
+        paste the lines for these retained topics — they carry the triage
+        information:
+
+          - `<prefix>/bridge/availability` — online / offline (Last Will)
+          - `<prefix>/bridge/status` — bridge-level JSON summary
+          - `<prefix>/<resource_id>/status` — per-meter JSON: `data_complete_to`,
+            `last_success`, `next_planned_update`, `consecutive_failures`
+
+        `<prefix>` is your `mqtt.topic_prefix` (default `glow`). The
+        `<prefix>/<resource_id>/state` topic is **not** retained, so it will not
+        appear here — that is expected, not the problem.
       render: text
     validations:
       required: false
