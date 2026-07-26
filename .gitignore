@@ -224,3 +224,7 @@ state.json
 
 # dev_scripts: raw API dumps are personal consumption data, not committed.
 glowbridge/dev_scripts/*.json
+
+# Working notes / design drafts: may contain deployment specifics (IPs,
+# hostnames) we don't want in public history.
+glowbridge/notes/
