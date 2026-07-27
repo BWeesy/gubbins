@@ -4,31 +4,33 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "requests>=2.31",
-#     "paho-mqtt>=2.0",
+#     "websocket-client>=1.7",
 # ]
 # ///
-"""glowbridge: publish UK smart meter readings from the Glowmarkt/DCC API to MQTT.
+"""glowbridge: import UK smart meter readings from the Glowmarkt/DCC API into
+Home Assistant as long-term statistics.
 
-Fetches finalised half-hourly consumption intervals from the Glowmarkt API
-(the backend behind Hildebrand's Bright app) and publishes a monotonic
-cumulative kWh total per meter to MQTT, with Home Assistant discovery.
+Fetches finalised hourly consumption from the Glowmarkt API (the backend
+behind Hildebrand's Bright app) and imports a per-meter cumulative kWh total
+into Home Assistant via the recorder/import_statistics WebSocket command,
+stamped with each hour's true time so consumption lands in the hour it
+actually happened.
 
 Design invariants — do not break these when modifying:
 
-  * The local state file is the single source of truth for the watermark and
-    cumulative total. The broker copy (retained status topics) is
-    observability only. The bridge NEVER subscribes to anything; it is a
-    pure publisher. Do not add recover-from-broker logic.
-  * Published cumulative values are monotonic by construction. Only intervals
-    past the finalisation lag are emitted, and each interval is emitted
-    exactly once. Emission is tracked by a contiguous frontier (watermark)
-    plus a ledger of already-emitted windows ahead of it: a gap holds the
-    frontier (so data_complete_to stays honest) without blocking emission of
-    later windows, and a late arrival heals the gap exactly once. See
-    select_emittable.
-  * State is written to disk before anything is published. A crash between
-    write and publish loses one publish (a gap), never double-counts.
-  * Secrets (Bright password, API token, MQTT password) must never reach the
+  * The local state file is the single source of truth for the per-resource
+    frontier and cumulative total. The bridge NEVER reads statistics back
+    from Home Assistant; HA is a write-only sink. Do not add
+    recover-from-HA logic.
+  * We supply the cumulative `sum` per hour; HA derives each hour's
+    consumption by differencing consecutive sums. The cumulative is monotonic
+    by construction and seeded at zero before the first backfilled hour.
+  * Imports are idempotent and revisable: late data and DCC revisions are
+    handled by re-importing the affected contiguous slice, recomputed from a
+    known settled baseline.
+  * State is written to disk before it is advanced past imported data. A
+    crash mid-cycle re-imports (idempotent), never loses or double-counts.
+  * Secrets (Bright password, Glow API token, HA token) must never reach the
     log stream. All log output passes through a redacting formatter.
 """
 
@@ -53,22 +55,34 @@ from typing import Any
 
 import requests
 
-VERSION = "0.1.1"
+VERSION = "1.0.0"
 
 GLOWMARKT_BASE_URL = "https://api.glowmarkt.com/api/v0-1"
 # Application ID published by Hildebrand for the Bright app. Overridable in
 # config in case Hildebrand rotate it.
 DEFAULT_APPLICATION_ID = "b0f1b774-a586-4f72-9edd-27ead8aa7a8d"
 
-HALF_HOUR = 1800  # seconds; the DCC reporting interval
-# How far back a resource with no prior state seeds its watermark.
-INITIAL_BACKFILL = timedelta(hours=24)
-# Maximum span requested per readings call. The API rejects or truncates
-# large PT30M ranges, so catch-up after downtime is chunked.
-MAX_FETCH_SPAN = timedelta(days=7)
+HOUR = 3600  # seconds; glowbridge works in hourly statistics buckets
+# Maximum span requested per readings call. The Glowmarkt API caps PT1H
+# requests at 31 days, so backfill and catch-up are chunked below that.
+MAX_FETCH_SPAN = timedelta(days=30)
 
-STATE_SCHEMA = 2
+STATE_SCHEMA = 3
 STATUS_SCHEMA = 1
+
+# Source domain for the external statistics we create in Home Assistant.
+# External statistic_ids are "{STAT_SOURCE}:{object}", e.g.
+# "glowbridge:electricity_consumption". ABI once history exists behind them.
+STAT_SOURCE = "glowbridge"
+
+# Max hourly rows per import_statistics message, so a year-long backfill is
+# split into several sends rather than one enormous WebSocket frame.
+IMPORT_BATCH = 2000
+
+# Minimum seconds between catchup nudges per resource (the API's documented
+# catchup limit). Persisted, so a restart-triggered rapid cycle cannot exceed
+# it. See Bridge._maybe_catchup.
+CATCHUP_FLOOR = 1800
 
 # Consumption classifiers to bridge. Cost resources are deliberately not
 # bridged: cost is derivable in Home Assistant from consumption and a tariff,
@@ -104,25 +118,12 @@ class AuthError(CycleError):
 
 
 @dataclasses.dataclass(frozen=True)
-class TlsConfig:
-    enabled: bool = False
-    ca_cert: str = ""
-    client_cert: str = ""
-    client_key: str = ""
-    insecure_skip_verify: bool = False
-
-
-@dataclasses.dataclass(frozen=True)
-class MqttConfig:
-    host: str = "localhost"
-    port: int = 1883
-    username: str = ""
-    password: str = ""
-    client_id: str = "glowbridge"
-    topic_prefix: str = "glowbridge"
-    discovery_prefix: str = "homeassistant"
-    qos: int = 1
-    tls: TlsConfig = dataclasses.field(default_factory=TlsConfig)
+class HomeAssistantConfig:
+    # WebSocket URL, e.g. ws://homeassistant:8123/api/websocket. Plain ws://
+    # is correct over a trusted path (Tailscale/localhost); use wss:// off an
+    # untrusted network. The token is a secret: file-or-env, env wins.
+    url: str = ""
+    token: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -138,7 +139,12 @@ class ScheduleConfig:
     interval: int = 1800
     jitter: int = 300
     finalisation_lag: int = 5400
-    heal_horizon: int = 604800
+    # Fresh-install backfill window; trailing span re-checked for DCC
+    # revisions each cycle; how stale a resource must be before we nudge the
+    # DCC via catchup. All seconds.
+    backfill_lookback: int = 31536000  # 365 days
+    revision_window: int = 604800  # 7 days — covers observed multi-day DCC backfills
+    catchup_stale_after: int = 86400  # 1 day
 
 
 @dataclasses.dataclass(frozen=True)
@@ -165,7 +171,9 @@ class Config:
     glowmarkt: GlowmarktConfig = dataclasses.field(default_factory=GlowmarktConfig)
     schedule: ScheduleConfig = dataclasses.field(default_factory=ScheduleConfig)
     retry: RetryConfig = dataclasses.field(default_factory=RetryConfig)
-    mqtt: MqttConfig = dataclasses.field(default_factory=MqttConfig)
+    homeassistant: HomeAssistantConfig = dataclasses.field(
+        default_factory=HomeAssistantConfig
+    )
     state: StateConfig = dataclasses.field(default_factory=StateConfig)
     logging: LoggingConfig = dataclasses.field(default_factory=LoggingConfig)
 
@@ -184,7 +192,9 @@ _CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "interval": int,
         "jitter": int,
         "finalisation_lag": int,
-        "heal_horizon": int,
+        "backfill_lookback": int,
+        "revision_window": int,
+        "catchup_stale_after": int,
     },
     "retry": {
         "max_attempts": int,
@@ -192,22 +202,9 @@ _CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "backoff_max": int,
         "auth_floor": int,
     },
-    "mqtt": {
-        "host": str,
-        "port": int,
-        "username": str,
-        "password": str,
-        "client_id": str,
-        "topic_prefix": str,
-        "discovery_prefix": str,
-        "qos": int,
-        "tls": {
-            "enabled": bool,
-            "ca_cert": str,
-            "client_cert": str,
-            "client_key": str,
-            "insecure_skip_verify": bool,
-        },
+    "homeassistant": {
+        "url": str,
+        "token": str,
     },
     "state": {"dir": str},
     "logging": {"level": str, "format": str},
@@ -215,7 +212,7 @@ _CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
 
 ENV_GLOW_USERNAME = "GLOWBRIDGE_GLOW_USERNAME"
 ENV_GLOW_PASSWORD = "GLOWBRIDGE_GLOW_PASSWORD"
-ENV_MQTT_PASSWORD = "GLOWBRIDGE_MQTT_PASSWORD"
+ENV_HA_TOKEN = "GLOWBRIDGE_HA_TOKEN"
 
 
 def _check_unknown_keys(raw: dict, schema: dict, path: str = "") -> list[str]:
@@ -245,19 +242,24 @@ def _check_unknown_keys(raw: dict, schema: dict, path: str = "") -> list[str]:
 def _validate_semantics(cfg: Config) -> list[str]:
     errors = []
     s = cfg.schedule
-    if s.interval < 300:
-        errors.append("schedule.interval: minimum is 300 seconds")
+    if s.interval < 1800:
+        # The DCC is half-hourly at best; polling faster buys nothing and
+        # only adds load, so it is not supported.
+        errors.append("schedule.interval: minimum is 1800 seconds (30 minutes)")
     if s.jitter < 0:
         errors.append("schedule.jitter: must be >= 0")
     if s.finalisation_lag < 0:
         errors.append("schedule.finalisation_lag: must be >= 0")
-    if s.heal_horizon <= s.finalisation_lag:
-        # A gap must outlive the finalisation lag before it can be abandoned,
-        # otherwise the frontier could skip a window that has not yet had its
-        # chance to arrive.
+    if s.revision_window < s.finalisation_lag:
+        # The trailing re-check must cover at least the un-finalised edge, or
+        # a revision to a just-finalised hour would never be picked up.
         errors.append(
-            "schedule.heal_horizon: must be greater than finalisation_lag"
+            "schedule.revision_window: must be >= finalisation_lag"
         )
+    if s.catchup_stale_after < 0:
+        errors.append("schedule.catchup_stale_after: must be >= 0")
+    if s.backfill_lookback < 0:
+        errors.append("schedule.backfill_lookback: must be >= 0")
     r = cfg.retry
     if r.max_attempts < 1:
         errors.append("retry.max_attempts: must be >= 1")
@@ -267,22 +269,13 @@ def _validate_semantics(cfg: Config) -> list[str]:
         errors.append("retry.backoff_max: must be >= retry.backoff_base")
     if r.auth_floor < 0:
         errors.append("retry.auth_floor: must be >= 0")
-    m = cfg.mqtt
-    if not (1 <= m.port <= 65535):
-        errors.append("mqtt.port: must be 1-65535")
-    if m.qos not in (0, 1):
-        errors.append("mqtt.qos: must be 0 or 1")
-    if not m.host:
-        errors.append("mqtt.host: must not be empty")
-    if not m.topic_prefix or "#" in m.topic_prefix or "+" in m.topic_prefix:
-        errors.append("mqtt.topic_prefix: must be non-empty, no wildcards")
-    t = m.tls
-    if bool(t.client_cert) != bool(t.client_key):
-        errors.append(
-            "mqtt.tls: client_cert and client_key must be set together"
-        )
-    if (t.ca_cert or t.client_cert or t.insecure_skip_verify) and not t.enabled:
-        errors.append("mqtt.tls: options set but tls.enabled is false")
+    h = cfg.homeassistant
+    if not h.url:
+        errors.append("homeassistant.url: required")
+    elif not (h.url.startswith("ws://") or h.url.startswith("wss://")):
+        errors.append("homeassistant.url: must be a ws:// or wss:// URL")
+    # The HA token is deliberately NOT required here: --dry-run and --dump-raw
+    # never touch HA. A missing token surfaces when the importer connects.
     g = cfg.glowmarkt
     if not g.username:
         errors.append(
@@ -306,17 +299,10 @@ def _validate_semantics(cfg: Config) -> list[str]:
 
 
 def _build_section(cls, raw: dict):
-    # Deferred annotations mean dataclass field types arrive as strings, so
-    # nested tables are dispatched by name, not by type inspection.
-    _NESTED = {"tls": TlsConfig}
-    kwargs = {}
-    for name, value in raw.items():
-        if name in _NESTED and isinstance(value, dict):
-            kwargs[name] = _build_section(_NESTED[name], value)
-        elif name == "resources":
-            kwargs[name] = tuple(value)
-        else:
-            kwargs[name] = value
+    kwargs = {
+        name: (tuple(value) if name == "resources" else value)
+        for name, value in raw.items()
+    }
     return cls(**kwargs)
 
 
@@ -341,19 +327,19 @@ def load_config(path: Path, environ: dict[str, str] | None = None) -> Config:
     # Env vars carry secrets only and take precedence over the file. All
     # other settings have exactly one home: the file.
     glow_raw = dict(raw.get("glowmarkt", {}))
-    mqtt_raw = dict(raw.get("mqtt", {}))
+    ha_raw = dict(raw.get("homeassistant", {}))
     if environ.get(ENV_GLOW_USERNAME):
         glow_raw["username"] = environ[ENV_GLOW_USERNAME]
     if environ.get(ENV_GLOW_PASSWORD):
         glow_raw["password"] = environ[ENV_GLOW_PASSWORD]
-    if environ.get(ENV_MQTT_PASSWORD):
-        mqtt_raw["password"] = environ[ENV_MQTT_PASSWORD]
+    if environ.get(ENV_HA_TOKEN):
+        ha_raw["token"] = environ[ENV_HA_TOKEN]
 
     cfg = Config(
         glowmarkt=_build_section(GlowmarktConfig, glow_raw),
         schedule=_build_section(ScheduleConfig, raw.get("schedule", {})),
         retry=_build_section(RetryConfig, raw.get("retry", {})),
-        mqtt=_build_section(MqttConfig, mqtt_raw),
+        homeassistant=_build_section(HomeAssistantConfig, ha_raw),
         state=_build_section(StateConfig, raw.get("state", {})),
         logging=_build_section(LoggingConfig, raw.get("logging", {})),
     )
@@ -371,9 +357,9 @@ def _warn_on_readable_secrets(path: Path, raw: dict) -> None:
     shareable, so the warning fires only when secrets are actually present.
     """
     glow = raw.get("glowmarkt", {})
-    mqtt = raw.get("mqtt", {})
+    ha = raw.get("homeassistant", {})
     has_secrets = bool(
-        glow.get("username") or glow.get("password") or mqtt.get("password")
+        glow.get("username") or glow.get("password") or ha.get("token")
     )
     if not has_secrets:
         return
@@ -410,14 +396,15 @@ def resolve_state_dir(cfg: Config) -> Path:
 
 
 class StateFile:
-    """Authoritative persistence: watermarks, cumulative totals, auth token,
-    discovered resource cache.
+    """Authoritative persistence: per-resource settled frontier and cumulative
+    baseline, Glow auth token, discovered resource cache.
 
-    A missing or unparseable file is treated as a fresh install, never as a
-    fatal error; recovery behaviour for that case lives in the emission
-    logic (cumulative restarts from 24 hours before the current run,
-    producing one plausible meter-reset event downstream rather than a
-    crash loop).
+    A missing, unparseable, or unrecognised-schema file is treated as a fresh
+    install, never fatal. A fresh install re-runs the backfill (seeding the
+    frontier at now - backfill_lookback); because imports are idempotent this
+    re-imports the same hours harmlessly rather than crash-looping. The
+    on-disk layout carries a `schema` version so a format change is a clean
+    version bump, not a silent misparse.
     """
 
     def __init__(self, state_dir: Path):
@@ -448,8 +435,6 @@ class StateFile:
                 "state file %s is corrupt (%s); starting fresh", self.path, exc
             )
             return
-        if isinstance(data, dict):
-            data = _migrate_state(data)
         if not isinstance(data, dict) or data.get("schema") != STATE_SCHEMA:
             log.warning(
                 "state file %s has unsupported schema %r; starting fresh",
@@ -505,15 +490,16 @@ class StateFile:
         return self.data["resources"].get(resource_id)
 
     def upsert_resource(
-        self, resource_id: str, classifier: str, name: str, watermark: datetime
+        self, resource_id: str, classifier: str, name: str, settled_through: datetime
     ) -> None:
         if resource_id not in self.data["resources"]:
             self.data["resources"][resource_id] = {
                 "classifier": classifier,
                 "name": name,
-                "watermark": watermark.isoformat(),
-                "emitted": [],
-                "cumulative_wh": 0,
+                "settled_through": settled_through.isoformat(),
+                "cumulative_wh_at_settled": 0,
+                "data_complete_to": "",
+                "last_catchup_at": "",
             }
         else:
             self.data["resources"][resource_id]["classifier"] = classifier
@@ -522,53 +508,40 @@ class StateFile:
     def drop_resource(self, resource_id: str) -> None:
         self.data["resources"].pop(resource_id, None)
 
-    def watermark(self, resource_id: str) -> datetime:
-        return _parse_iso(self.data["resources"][resource_id]["watermark"])
+    def settled_through(self, resource_id: str) -> datetime:
+        return _parse_iso(self.data["resources"][resource_id]["settled_through"])
 
-    def emitted(self, resource_id: str) -> set[datetime]:
-        """Starts of already-emitted windows lying ahead of the watermark.
+    def cumulative_at_settled(self, resource_id: str) -> int:
+        return int(self.data["resources"][resource_id]["cumulative_wh_at_settled"])
 
-        These are the non-contiguous windows folded into the cumulative
-        total while a gap below them still holds the frontier back. Held as
-        a set so re-fetched windows are recognised and never counted twice.
-        """
-        raw = self.data["resources"][resource_id].get("emitted", [])
-        return {_parse_iso(v) for v in raw}
+    def data_complete_to(self, resource_id: str) -> datetime | None:
+        return _parse_iso(self.data["resources"][resource_id].get("data_complete_to", ""))
 
-    def advance(
+    def last_catchup_at(self, resource_id: str) -> datetime | None:
+        return _parse_iso(self.data["resources"][resource_id].get("last_catchup_at", ""))
+
+    def mark_catchup(self, resource_id: str, now: datetime) -> None:
+        self.data["resources"][resource_id]["last_catchup_at"] = now.isoformat()
+
+    def commit(
         self,
         resource_id: str,
-        watermark: datetime,
-        emitted: set[datetime],
-        added_wh: int,
+        settled_through: datetime,
+        cumulative_wh_at_settled: int,
+        data_complete_to: datetime | None,
     ) -> None:
+        """Advance the settled frontier and its cumulative baseline.
+
+        Both move together: cumulative_wh_at_settled is the running total as
+        of settled_through, so a later cycle can recompute forward sums from a
+        known point without storing per-hour energy.
+        """
         entry = self.data["resources"][resource_id]
-        entry["watermark"] = watermark.isoformat()
-        entry["emitted"] = [dt.isoformat() for dt in sorted(emitted)]
-        entry["cumulative_wh"] = int(entry["cumulative_wh"]) + int(added_wh)
-
-    def cumulative_wh(self, resource_id: str) -> int:
-        return int(self.data["resources"][resource_id]["cumulative_wh"])
-
-
-def _migrate_state(data: dict[str, Any]) -> dict[str, Any]:
-    """Bring an older on-disk state layout up to the current schema.
-
-    Migration preserves cumulative totals so upgrading the bridge does not
-    manufacture a spurious meter-reset in Home Assistant. Only forward
-    migration is supported; an unrecognised (e.g. future) schema falls
-    through to the caller's fresh-start handling.
-
-    v1 -> v2: adds the per-resource ``emitted`` ledger (the set of
-    already-emitted window starts ahead of the watermark). A v1 watermark
-    was a strict contiguous frontier with nothing emitted above it, so the
-    correct v2 value is an empty ledger.
-    """
-    if data.get("schema") == 1:
-        for entry in data.get("resources", {}).values():
-            entry.setdefault("emitted", [])
-        data["schema"] = 2
-    return data
+        entry["settled_through"] = settled_through.isoformat()
+        entry["cumulative_wh_at_settled"] = int(cumulative_wh_at_settled)
+        entry["data_complete_to"] = (
+            data_complete_to.isoformat() if data_complete_to else ""
+        )
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -585,19 +558,18 @@ def _parse_iso(value: str) -> datetime | None:
 # --------------------------------------------------------------------------
 
 
-def initial_watermark(now: datetime) -> datetime:
-    """Seed watermark for a resource with no prior state.
+def initial_settled(now: datetime, backfill_lookback: int) -> datetime:
+    """Seed the settled frontier for a resource with no prior state.
 
-    Fixed lookback rather than civil-day-start: avoids a timezone config
-    knob and makes the first published cumulative value predictable
-    regardless of what time of day the bridge is first started.
+    A fixed lookback (default a year) so a fresh install backfills that much
+    history; hour-aligned so it lines up with HA's hourly statistics buckets.
     """
-    return floor_half_hour(now - INITIAL_BACKFILL)
+    return floor_hour(now - timedelta(seconds=backfill_lookback))
 
 
-def floor_half_hour(dt: datetime) -> datetime:
+def floor_hour(dt: datetime) -> datetime:
     dt = dt.astimezone(UTC)
-    return dt.replace(minute=(dt.minute // 30) * 30, second=0, microsecond=0)
+    return dt.replace(minute=0, second=0, microsecond=0)
 
 
 def install_offset(seed: str, jitter: int) -> int:
@@ -642,106 +614,94 @@ def next_cycle_start(now: float, interval: int, offset: int) -> float:
 
 @dataclasses.dataclass(frozen=True)
 class Reading:
-    start: datetime  # interval start, UTC, half-hour aligned
+    start: datetime  # hour start, UTC, hour aligned
     kwh: float
 
 
 @dataclasses.dataclass(frozen=True)
-class Emission:
-    new_watermark: datetime
-    new_emitted: set[datetime]
-    added_wh: int
-    intervals: int
+class ImportPlan:
+    rows: list[dict]  # finalised {"start": iso, "sum": kwh}, ascending
+    new_settled_through: datetime  # frontier to commit (now - revision_window)
+    new_cumulative_wh: int  # cumulative Wh through new_settled_through
+    data_complete_to: datetime | None  # newest hour with real data this fetch
+    imported_hours: int
 
 
-def select_emittable(
+def plan_import(
     readings: list[Reading],
-    watermark: datetime,
-    emitted: set[datetime],
+    settled_through: datetime,
+    cumulative_at_settled: int,
     now: datetime,
     finalisation_lag: int,
-    heal_horizon: int,
-) -> Emission:
-    """Choose which intervals to fold into the cumulative total.
+    revision_window: int,
+) -> ImportPlan:
+    """Turn a fetch window into hourly {start, sum} rows to import.
 
-    The state is a contiguous frontier (``watermark``) plus a *ledger*
-    (``emitted``): the set of window starts strictly ahead of the frontier
-    that have already been counted while a gap below them holds the
-    frontier back. Together they give exactly-once, monotonic emission
-    without a stall mode:
+    Walks hourly from the settled frontier to now, threading the cumulative
+    total (integer Wh) from the known baseline. Each present, finalised hour
+    becomes a row whose ``sum`` is the cumulative *including* that hour — HA
+    differences consecutive sums to get per-hour consumption, so the sum at
+    hour H must be the running total through the end of H.
 
-      * A window is finalised once its END is at or before
-        ``now - finalisation_lag``; younger data may still be revised by
-        the DCC and is left alone.
-      * Any finalised window at or above the watermark that is not already
-        in the ledger is emitted, *in whatever order it arrives*. A gap no
-        longer halts emission — later windows are folded in immediately and
-        recorded in the ledger. This is what makes a late-arriving interval
-        self-heal exactly once: on the refetch that finally returns it, it
-        is emitted and the ledger drains as the frontier sweeps over it.
-      * The frontier then sweeps forward across every contiguous ledger
-        entry (draining them), so ``data_complete_to`` still means "all
-        windows up to here are accounted for".
-      * A gap that outlives ``heal_horizon`` is abandoned: the frontier
-        steps over it (accepting that one lost half-hour) so a permanently
-        undelivered window cannot freeze the frontier forever. The ledger
-        is thereby bounded to roughly ``heal_horizon`` of entries.
+    HA convention (do not "fix" this into a one-hour shift): a row's ``start``
+    is the BEGINNING of the hour, but its ``sum`` is the value as of the END
+    of that hour. HA shows the bar at start=H as sum(H) - sum(H-1), i.e. the
+    consumption during [H, H+1). Glow gives us interval-start + the energy
+    used during that interval, so start=H with sum-through-end-of-H lands the
+    consumption in HA's H bar exactly. Verified against HA statistics docs.
 
-    Windows below the watermark are ignored: they were emitted and swept
-    long ago, and the API is never refetched behind the frontier.
+    Missing hours are skipped entirely (no row): a gap shows in HA as no
+    data rather than a fabricated zero, and heals when the DCC later delivers
+    it — a re-import overwrites by (statistic_id, start), so late data and
+    revisions self-correct with no per-hour bookkeeping.
+
+    The frontier only advances to ``now - revision_window``: the trailing
+    window stays re-fetchable so DCC revisions and late fills self-correct.
+    The cumulative baseline for that point is captured as the walk crosses
+    it, so the next cycle recomputes forward sums from a known base without
+    storing per-hour energy.
     """
+    step = timedelta(seconds=HOUR)
     cutoff = now - timedelta(seconds=finalisation_lag)
-    abandon_before = now - timedelta(seconds=heal_horizon)
-    step = timedelta(seconds=HALF_HOUR)
+    settle_target = floor_hour(now - timedelta(seconds=revision_window))
+    if settle_target < settled_through:
+        settle_target = settled_through  # never regress the frontier
 
-    emitted = set(emitted)
-    added_wh = 0
-    count = 0
-    for reading in readings:
-        start = reading.start
-        if start < watermark or start in emitted:
-            continue  # already counted (below frontier or already in ledger)
-        if start + step > cutoff:
-            continue  # not yet finalised
-        added_wh += round(reading.kwh * 1000)
-        emitted.add(start)
-        count += 1
+    by_start = {r.start: r.kwh for r in readings if r.start >= settled_through}
+    newest_present = max(by_start) if by_start else None
 
-    # Sweep the contiguous frontier forward, draining ledger entries as it
-    # passes them and stepping over gaps too old to keep waiting on.
-    cursor = watermark
-    abandoned = 0
-    while True:
-        if cursor in emitted:
-            emitted.discard(cursor)
-            cursor += step
-            continue
-        if cursor + step <= cutoff and cursor < abandon_before:
-            abandoned += 1
-            cursor += step
-            continue
-        break
+    cum = cumulative_at_settled
+    cum_at_target = cumulative_at_settled
+    hit_target = False
+    rows: list[dict] = []
+    cursor = settled_through
+    while cursor < now:
+        if cursor == settle_target:
+            # Cumulative through settle_target: this hour not yet added, so
+            # cum is the sum of all hours strictly before the new frontier.
+            cum_at_target = cum
+            hit_target = True
+        kwh = by_start.get(cursor)
+        if kwh is not None:
+            cum += round(kwh * 1000)
+            if cursor + step <= cutoff:  # finalised
+                rows.append(
+                    {"start": cursor.isoformat(), "sum": round(cum / 1000, 3)}
+                )
+        cursor += step
 
-    # A single loud line per cycle, not one per window: abandoning finalised
-    # data is a permanent loss worth surfacing clearly, but a multi-day outage
-    # ageing out at once must not bury the log in hundreds of near-identical
-    # warnings. This is the "loud skip" the frontier relies on to never stall.
-    if abandoned:
-        log.warning(
-            "heal_horizon (%ds) exceeded: abandoned %d unfilled window(s) and"
-            " advanced the frontier from %s to %s; that consumption is"
-            " permanently excluded from the cumulative total",
-            heal_horizon,
-            abandoned,
-            watermark.isoformat(),
-            cursor.isoformat(),
-        )
+    if not hit_target:
+        # settle_target sits at or beyond `now` (e.g. a tiny revision_window
+        # with an hour-aligned now): everything walked is before the frontier,
+        # so the cumulative through it is the final running total.
+        cum_at_target = cum
 
-    return Emission(
-        new_watermark=cursor,
-        new_emitted=emitted,
-        added_wh=added_wh,
-        intervals=count,
+    return ImportPlan(
+        rows=rows,
+        new_settled_through=settle_target,
+        new_cumulative_wh=cum_at_target,
+        data_complete_to=newest_present,
+        imported_hours=len(rows),
     )
 
 
@@ -835,9 +795,9 @@ class GlowmarktClient:
         params = {
             "from": start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S"),
             "to": end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S"),
-            "period": "PT30M",
+            "period": "PT1H",
             "function": "sum",
-            "offset": 0,
+            "offset": 0,  # UTC — aligns hour boundaries with HA's statistics
             "nulls": 1,
         }
         resp = self._get(
@@ -864,6 +824,30 @@ class GlowmarktClient:
             )
         readings.sort(key=lambda r: r.start)
         return readings
+
+    def get_readings_raw(
+        self, resource_id: str, start: datetime, end: datetime
+    ) -> tuple[list, dict]:
+        """Raw /readings for --dump-raw: the untransformed data rows (nulls
+        included) plus the response envelope with data stripped, for
+        eyeballing the API's actual shape. No transform, no null filtering."""
+        params = {
+            "from": start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S"),
+            "to": end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S"),
+            "period": "PT1H",
+            "function": "sum",
+            "offset": 0,
+            "nulls": 1,
+        }
+        resp = self._get(
+            f"{GLOWMARKT_BASE_URL}/resource/{resource_id}/readings", params=params
+        )
+        body = resp.json()
+        rows = body.get("data")
+        if not isinstance(rows, list):
+            rows = []
+        envelope = {k: v for k, v in body.items() if k != "data"}
+        return rows, envelope
 
     def _get(self, url: str, params: dict | None = None) -> requests.Response:
         resp = self.session.get(
@@ -902,115 +886,117 @@ def _retry_after_seconds(resp: requests.Response) -> int | None:
 
 
 # --------------------------------------------------------------------------
-# MQTT publisher
+# Home Assistant statistics importer
 # --------------------------------------------------------------------------
 
 
-class MqttPublisher:
-    """Write-only MQTT client. Subscribes to nothing, by design."""
+def statistic_id_for(resource_id: str, classifier: str) -> str:
+    """External statistic_id for a resource.
 
-    PUBLISH_TIMEOUT = 10
+    Classifier-based for discovered consumption resources (stable, readable):
+    "electricity.consumption" -> "glowbridge:electricity_consumption". For a
+    pinned resource, whose classifier we never look up, it falls back to the
+    resource id so each pinned resource still gets a distinct, stable id.
+    ABI once history exists behind it: the `:` marks it external (our own).
+    """
+    if classifier in BRIDGED_CLASSIFIERS:
+        obj = classifier.replace(".", "_")
+    else:
+        obj = resource_id.replace("-", "_")
+    return f"{STAT_SOURCE}:{obj}"
+
+
+class HaImporter:
+    """Write-only Home Assistant long-term statistics importer.
+
+    Opens one WebSocket per cycle, authenticates with a long-lived token, and
+    sends recorder/import_statistics commands. Reads nothing back beyond
+    command acknowledgements — HA is a pure sink. Lifecycle per cycle:
+    connect() → import_statistics() one or more times → close().
+    """
+
     CONNECT_TIMEOUT = 15
+    RECV_TIMEOUT = 30
 
-    def __init__(self, cfg: MqttConfig):
-        import paho.mqtt.client as mqtt
+    def __init__(self, cfg: HomeAssistantConfig):
+        import websocket  # lazy import; only needed when actually importing
 
-        self._mqtt = mqtt
+        self._websocket = websocket
         self.cfg = cfg
-        self.client = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            client_id=cfg.client_id,
-            protocol=mqtt.MQTTv311,
-        )
-        if cfg.username:
-            self.client.username_pw_set(cfg.username, cfg.password or None)
-        if cfg.tls.enabled:
-            self.client.tls_set(
-                ca_certs=cfg.tls.ca_cert or None,
-                certfile=cfg.tls.client_cert or None,
-                keyfile=cfg.tls.client_key or None,
-            )
-            if cfg.tls.insecure_skip_verify:
-                self.client.tls_insecure_set(True)
-        self.availability_topic = f"{cfg.topic_prefix}/bridge/availability"
-        self.client.will_set(
-            self.availability_topic, payload="offline", qos=cfg.qos, retain=True
-        )
+        self.ws = None
+        self._id = 0
 
     def connect(self) -> None:
-        self.client.connect(self.cfg.host, self.cfg.port, keepalive=60)
-        self.client.loop_start()
-        deadline = time.monotonic() + self.CONNECT_TIMEOUT
-        while not self.client.is_connected():
-            if time.monotonic() > deadline:
-                raise CycleError(
-                    f"MQTT connect to {self.cfg.host}:{self.cfg.port} timed out"
-                )
-            time.sleep(0.1)
-        self.publish(self.availability_topic, "online", retain=True)
+        if not self.cfg.token:
+            # AuthError so the cycle is abandoned, not retried in a loop: a
+            # missing/invalid token will not fix itself within a cycle.
+            raise AuthError(
+                f"Home Assistant token not set ({ENV_HA_TOKEN}); cannot import"
+            )
+        try:
+            self.ws = self._websocket.create_connection(
+                self.cfg.url, timeout=self.CONNECT_TIMEOUT
+            )
+            self.ws.settimeout(self.RECV_TIMEOUT)
+        except Exception as exc:
+            raise CycleError(
+                f"cannot connect to Home Assistant at {self.cfg.url}: {exc}"
+            ) from exc
+        hello = self._recv()
+        if hello.get("type") != "auth_required":
+            raise CycleError(
+                f"unexpected Home Assistant greeting: {hello.get('type')!r}"
+            )
+        self._send({"type": "auth", "access_token": self.cfg.token})
+        result = self._recv()
+        if result.get("type") != "auth_ok":
+            raise AuthError("Home Assistant rejected the access token")
+
+    def import_statistics(
+        self, statistic_id: str, name: str, stats: list[dict]
+    ) -> None:
+        """Import one contiguous run of hourly {start, sum} rows.
+
+        The metadata block creates the external statistic on first import;
+        subsequent imports overwrite by (statistic_id, start), which is how
+        revisions and late gap-fills self-correct.
+        """
+        self._id += 1
+        self._send(
+            {
+                "id": self._id,
+                "type": "recorder/import_statistics",
+                "metadata": {
+                    "has_mean": False,
+                    "has_sum": True,
+                    "name": name,
+                    "source": STAT_SOURCE,
+                    "statistic_id": statistic_id,
+                    "unit_of_measurement": "kWh",
+                },
+                "stats": stats,
+            }
+        )
+        result = self._recv()
+        if not result.get("success"):
+            raise CycleError(
+                f"Home Assistant rejected import for {statistic_id}:"
+                f" {result.get('error')}"
+            )
 
     def close(self) -> None:
-        try:
-            self.publish(self.availability_topic, "offline", retain=True)
-        except Exception:
-            pass
-        self.client.loop_stop()
-        self.client.disconnect()
+        if self.ws is not None:
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+            self.ws = None
 
-    def publish(self, topic: str, payload: str, retain: bool = False) -> None:
-        info = self.client.publish(
-            topic, payload, qos=self.cfg.qos, retain=retain
-        )
-        info.wait_for_publish(timeout=self.PUBLISH_TIMEOUT)
-        if not info.is_published():
-            raise CycleError(f"publish to {topic} not acknowledged")
+    def _send(self, msg: dict) -> None:
+        self.ws.send(json.dumps(msg))
 
-
-# --------------------------------------------------------------------------
-# Topics and Home Assistant discovery
-# --------------------------------------------------------------------------
-
-
-def state_topic(prefix: str, resource_id: str) -> str:
-    return f"{prefix}/{resource_id}/state"
-
-
-def status_topic(prefix: str, resource_id: str) -> str:
-    return f"{prefix}/{resource_id}/status"
-
-
-def bridge_status_topic(prefix: str) -> str:
-    return f"{prefix}/bridge/status"
-
-
-def discovery_payload(
-    cfg: MqttConfig, resource_id: str, classifier: str, name: str
-) -> tuple[str, str]:
-    """Home Assistant MQTT discovery config for one consumption sensor.
-
-    unique_id and the topic layout are treated as ABI: changing them
-    orphans users' entities and breaks Energy dashboard configuration.
-    """
-    object_id = f"glowbridge_{resource_id.replace('-', '_')}"
-    topic = f"{cfg.discovery_prefix}/sensor/{object_id}/config"
-    payload = {
-        "name": name,
-        "unique_id": object_id,
-        "state_topic": state_topic(cfg.topic_prefix, resource_id),
-        "json_attributes_topic": status_topic(cfg.topic_prefix, resource_id),
-        "availability_topic": f"{cfg.topic_prefix}/bridge/availability",
-        "device_class": "energy",
-        "state_class": "total_increasing",
-        "unit_of_measurement": "kWh",
-        "suggested_display_precision": 3,
-        "device": {
-            "identifiers": ["glowbridge"],
-            "name": "glowbridge",
-            "manufacturer": "glowbridge",
-            "sw_version": VERSION,
-        },
-    }
-    return topic, json.dumps(payload, sort_keys=True)
+    def _recv(self) -> dict:
+        return json.loads(self.ws.recv())
 
 
 # --------------------------------------------------------------------------
@@ -1024,14 +1010,26 @@ class Bridge:
         cfg: Config,
         state: StateFile,
         client: GlowmarktClient,
-        publisher: MqttPublisher | None,
+        importer: HaImporter | None,
     ):
         self.cfg = cfg
         self.state = state
         self.client = client
-        self.publisher = publisher  # None in --dry-run
+        self.importer = importer  # None in --dry-run / --dump-raw
         self.consecutive_failures = 0
         self.last_success: datetime | None = None
+        self.last_attempt: datetime | None = None
+        self.last_error = ""
+        # Secrets scrubbed from the status file's last_error, same set the
+        # log formatter redacts.
+        self._secrets = [cfg.glowmarkt.password, cfg.homeassistant.token]
+
+    @property
+    def status_path(self) -> Path:
+        return self.state.path.parent / "status.json"
+
+    def _seed(self, now: datetime) -> datetime:
+        return initial_settled(now, self.cfg.schedule.backfill_lookback)
 
     # -- auth ------------------------------------------------------------
 
@@ -1075,7 +1073,7 @@ class Bridge:
             for rid in self.cfg.glowmarkt.resources:
                 if self.state.resource(rid) is None:
                     self.state.upsert_resource(
-                        rid, "pinned", rid, initial_watermark(now)
+                        rid, "pinned", rid, self._seed(now)
                     )
             return list(self.cfg.glowmarkt.resources)
         cached = self.state.resource_ids()
@@ -1092,7 +1090,7 @@ class Bridge:
                 continue
             name = res.get("name") or BRIDGED_CLASSIFIERS[classifier]
             self.state.upsert_resource(
-                rid, classifier, name, initial_watermark(now)
+                rid, classifier, name, self._seed(now)
             )
             found.append(rid)
         if not found:
@@ -1124,122 +1122,139 @@ class Bridge:
     # -- one cycle -------------------------------------------------------
 
     def run_cycle(self, now: datetime) -> None:
-        """One poll: fetch finalised intervals per resource, persist, publish.
+        """One poll: per resource, fetch hourly readings, import the finalised
+        rows to Home Assistant, then advance the settled frontier.
 
-        Ordering is load-bearing: state file first, then sensor state, then
-        status. A crash mid-sequence must leave the broker conservative
-        (status never claims more than was published) and the file ahead of
-        the broker (a gap, never a double-count).
+        Ordering is load-bearing: import FIRST, then commit the frontier.
+        Imports are idempotent, so a crash after importing but before
+        committing simply re-imports next cycle; committing the frontier
+        first would risk skipping un-imported data.
         """
+        self.last_attempt = now
         self.ensure_token(now)
         resources = self.resolve_resources(now)
 
-        emissions: dict[str, Emission] = {}
-        for rid in resources:
-            try:
-                emissions[rid] = self._fetch_resource(rid, now)
-            except TokenExpired:
-                log.info("token rejected; re-authenticating")
-                self.state.clear_token()
-                self.client.set_token("")
-                self.ensure_token(now, force=True)
-                emissions[rid] = self._fetch_resource(rid, now)
-            except ResourceMissing:
-                self.rediscover(rid, now)
-                # Freshly discovered resources are picked up next cycle;
-                # this cycle continues with the survivors.
-
-        # Persist every fetched resource, not only those with new energy:
-        # the frontier and ledger can move on their own when a gap is
-        # abandoned past the heal horizon (intervals == 0, watermark still
-        # advances), and that movement must survive a crash.
-        for rid, e in emissions.items():
-            self.state.advance(rid, e.new_watermark, e.new_emitted, e.added_wh)
-        self.state.save()
-
-        # The sensor state topic carries the cumulative total, so it only
-        # needs republishing when new windows were folded in this cycle.
-        changed = [rid for rid, e in emissions.items() if e.intervals > 0]
+        imported_hours = 0
+        try:
+            for rid in resources:
+                try:
+                    imported_hours += self._process_resource(rid, now)
+                except TokenExpired:
+                    log.info("token rejected; re-authenticating")
+                    self.state.clear_token()
+                    self.client.set_token("")
+                    self.ensure_token(now, force=True)
+                    imported_hours += self._process_resource(rid, now)
+                except ResourceMissing:
+                    self.rediscover(rid, now)
+                    # Replacement resources are polled next cycle; this cycle
+                    # continues with the survivors.
+        finally:
+            # One WebSocket per cycle: opened lazily on first import, always
+            # closed here.
+            if self.importer is not None:
+                self.importer.close()
 
         self.last_success = now
         self.consecutive_failures = 0
-
-        if self.publisher is None:
-            self._print_dry_run(emissions)
-            return
-
-        for rid in changed:
-            kwh = self.state.cumulative_wh(rid) / 1000
-            self.publisher.publish(
-                state_topic(self.cfg.mqtt.topic_prefix, rid), f"{kwh:.3f}"
-            )
-        for rid in emissions:
-            self.publisher.publish(
-                status_topic(self.cfg.mqtt.topic_prefix, rid),
-                self._resource_status(rid, now),
-                retain=True,
-            )
-        self.publisher.publish(
-            bridge_status_topic(self.cfg.mqtt.topic_prefix),
-            self._bridge_status(now),
-            retain=True,
-        )
+        self.last_error = ""
         log.info(
-            "cycle complete: %d resource(s), %d with new data",
-            len(emissions),
-            len(changed),
+            "cycle complete: %d resource(s), %d hour(s) imported",
+            len(resources),
+            imported_hours,
         )
+        # importer is None only in --dry-run, which writes nothing.
+        if self.importer is not None:
+            self.write_status(now)
 
-    def _fetch_resource(self, rid: str, now: datetime) -> Emission:
-        entry = self.state.resource(rid)
-        watermark = floor_half_hour(self.state.watermark(rid))
-        emitted = self.state.emitted(rid)
-        self.client.catchup(rid)
+    def _process_resource(self, rid: str, now: datetime) -> int:
+        """Fetch, import and advance one resource. Returns hours imported."""
+        entry = self.state.resource(rid) or {}
+        classifier = entry.get("classifier", "")
+        settled = floor_hour(self.state.settled_through(rid))
+        cumulative = self.state.cumulative_at_settled(rid)
+
+        self._maybe_catchup(rid, now)
+
         readings: list[Reading] = []
-        # Refetch from the frontier every cycle: windows in the ledger above
-        # it are recognised and skipped, so this is how a gap left behind
-        # earlier gets a chance to arrive and heal.
-        for start, end in fetch_windows(watermark, now):
+        # Re-fetch the whole [frontier, now] span every cycle: the trailing
+        # revision window is re-imported so DCC revisions and late fills
+        # self-correct via idempotent overwrite.
+        for start, end in fetch_windows(settled, now):
             readings.extend(self.client.get_readings(rid, start, end))
-        emission = select_emittable(
+
+        plan = plan_import(
             readings,
-            watermark,
-            emitted,
+            settled,
+            cumulative,
             now,
             self.cfg.schedule.finalisation_lag,
-            self.cfg.schedule.heal_horizon,
+            self.cfg.schedule.revision_window,
         )
-        log.debug(
-            "resource %s (%s): %d interval(s) emitted, frontier %s, ledger %d ahead",
-            rid,
-            entry.get("classifier", "?") if entry else "?",
-            emission.intervals,
-            emission.new_watermark.isoformat(),
-            len(emission.new_emitted),
-        )
-        return emission
 
-    def publish_failure_status(self, now: datetime, next_planned: datetime) -> None:
-        """After a failed cycle the bridge still reports in: status topics
-        carry the pushed-out next_planned_update and the failure count so a
-        limping bridge is visible, distinct from a dead one (LWT) and from
-        a stale DCC feed (data_complete_to vs last_success)."""
-        if self.publisher is None:
-            return
-        try:
-            for rid in self.state.resource_ids():
-                self.publisher.publish(
-                    status_topic(self.cfg.mqtt.topic_prefix, rid),
-                    self._resource_status(rid, now, next_planned),
-                    retain=True,
-                )
-            self.publisher.publish(
-                bridge_status_topic(self.cfg.mqtt.topic_prefix),
-                self._bridge_status(now, next_planned),
-                retain=True,
+        if self.importer is not None and plan.rows:
+            self._import_rows(
+                statistic_id_for(rid, classifier),
+                entry.get("name") or classifier or rid,
+                plan.rows,
             )
-        except Exception as exc:
-            log.warning("could not publish failure status: %s", exc)
+
+        # data_complete_to never regresses: keep the newest real hour ever seen.
+        newest = plan.data_complete_to
+        prev = self.state.data_complete_to(rid)
+        if prev is not None and (newest is None or prev > newest):
+            newest = prev
+
+        # Commit AFTER importing (see run_cycle): a crash here re-imports.
+        self.state.commit(
+            rid, plan.new_settled_through, plan.new_cumulative_wh, newest
+        )
+        self.state.save()
+
+        log.debug(
+            "resource %s (%s): imported %d hour(s), frontier -> %s,"
+            " data complete to %s",
+            rid,
+            classifier or "?",
+            plan.imported_hours,
+            plan.new_settled_through.isoformat(),
+            newest.isoformat() if newest else "never",
+        )
+        if self.importer is None:
+            self._print_dry_run(rid, classifier, plan)
+        return plan.imported_hours
+
+    def _maybe_catchup(self, rid: str, now: datetime) -> None:
+        """Nudge the DCC via catchup only when a resource is stale by more
+        than catchup_stale_after, throttled to once per CATCHUP_FLOOR and
+        persisted so a restart cannot exceed it. Best effort; skipped in
+        dry-run (importer is None)."""
+        if self.importer is None:
+            return
+        complete = self.state.data_complete_to(rid)
+        if complete is None:
+            return  # fresh resource: the backfill fetches whatever exists
+        if now - complete <= timedelta(seconds=self.cfg.schedule.catchup_stale_after):
+            return
+        last = self.state.last_catchup_at(rid)
+        if last is not None and now - last < timedelta(seconds=CATCHUP_FLOOR):
+            return
+        log.info(
+            "resource %s stale since %s; nudging the DCC via catchup",
+            rid,
+            complete.isoformat(),
+        )
+        self.state.mark_catchup(rid, now)
+        self.state.save()
+        self.client.catchup(rid)
+
+    def _import_rows(self, statistic_id: str, name: str, rows: list[dict]) -> None:
+        if self.importer.ws is None:
+            self.importer.connect()  # lazy: one connection per cycle
+        for i in range(0, len(rows), IMPORT_BATCH):
+            self.importer.import_statistics(
+                statistic_id, name, rows[i : i + IMPORT_BATCH]
+            )
 
     def next_planned(self, now: datetime) -> datetime:
         ts = next_cycle_start(
@@ -1249,59 +1264,60 @@ class Bridge:
         )
         return datetime.fromtimestamp(ts, tz=UTC)
 
-    def _status_base(
-        self, now: datetime, next_planned: datetime | None
-    ) -> dict[str, Any]:
-        """Fields common to the resource and bridge status payloads."""
-        return {
+    def write_status(
+        self, now: datetime, next_planned: datetime | None = None
+    ) -> None:
+        """Rewrite the observability status file next to state.json. Safe to
+        paste into a bug report — last_error is redacted, no secrets, and the
+        auth token lives only in state.json, never here. Never fatal: a status
+        write failure must not fail a cycle."""
+        payload: dict[str, Any] = {
             "schema": STATUS_SCHEMA,
+            "bridge_version": VERSION,
+            "last_attempt": _iso_or_empty(self.last_attempt),
             "last_success": _iso_or_empty(self.last_success),
+            "consecutive_failures": self.consecutive_failures,
             "next_planned_update": (
                 next_planned or self.next_planned(now)
             ).isoformat(),
-            "consecutive_failures": self.consecutive_failures,
-            "bridge_version": VERSION,
+            "last_error": redact(self.last_error, self._secrets),
+            "resources": {},
         }
-
-    def _resource_status(
-        self, rid: str, now: datetime, next_planned: datetime | None = None
-    ) -> str:
-        entry = self.state.resource(rid) or {}
-        payload = self._status_base(now, next_planned)
-        payload["data_complete_to"] = entry.get("watermark", "")
-        payload["cumulative_kwh"] = round(
-            int(entry.get("cumulative_wh", 0)) / 1000, 3
-        )
-        return json.dumps(payload, sort_keys=True)
-
-    def _bridge_status(
-        self, now: datetime, next_planned: datetime | None = None
-    ) -> str:
-        payload = self._status_base(now, next_planned)
-        payload["resources"] = self.state.resource_ids()
-        return json.dumps(payload, sort_keys=True)
-
-    def _print_dry_run(self, emissions: dict[str, Emission]) -> None:
-        for rid, emission in emissions.items():
-            kwh = self.state.cumulative_wh(rid) / 1000
-            print(
-                f"[dry-run] {state_topic(self.cfg.mqtt.topic_prefix, rid)}"
-                f" -> {kwh:.3f} ({emission.intervals} new interval(s),"
-                f" watermark {emission.new_watermark.isoformat()})"
-            )
-
-    def publish_discovery(self) -> None:
-        if self.publisher is None:
-            return
         for rid in self.state.resource_ids():
             entry = self.state.resource(rid) or {}
-            topic, payload = discovery_payload(
-                self.cfg.mqtt,
-                rid,
-                entry.get("classifier", ""),
-                entry.get("name", rid),
+            classifier = entry.get("classifier", "")
+            payload["resources"][statistic_id_for(rid, classifier)] = {
+                "resource_id": rid,
+                "classifier": classifier,
+                "settled_through": entry.get("settled_through", ""),
+                "data_complete_to": entry.get("data_complete_to", ""),
+                "cumulative_kwh": round(
+                    int(entry.get("cumulative_wh_at_settled", 0)) / 1000, 3
+                ),
+                "last_catchup_at": entry.get("last_catchup_at", ""),
+            }
+        try:
+            self.status_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.status_path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
             )
-            self.publisher.publish(topic, payload, retain=True)
+            os.replace(tmp, self.status_path)
+        except OSError as exc:
+            log.warning("could not write status file %s: %s", self.status_path, exc)
+
+    def _print_dry_run(self, rid: str, classifier: str, plan: ImportPlan) -> None:
+        sid = statistic_id_for(rid, classifier)
+        span = ""
+        if plan.rows:
+            span = (
+                f" [{plan.rows[0]['start']} sum={plan.rows[0]['sum']}"
+                f" .. {plan.rows[-1]['start']} sum={plan.rows[-1]['sum']}]"
+            )
+        print(
+            f"[dry-run] {sid}: {plan.imported_hours} hour(s) to import{span};"
+            f" frontier -> {plan.new_settled_through.isoformat()}"
+        )
 
 
 def _iso_or_empty(dt: datetime | None) -> str:
@@ -1328,8 +1344,10 @@ def run_cycle_with_retries(bridge: Bridge, cfg: Config, sleeper=time.sleep) -> b
         except AuthError as exc:
             # Retrying inside the cycle cannot help before the floor passes.
             log.error("cycle abandoned: %s", exc)
+            bridge.last_error = str(exc)
             break
         except RateLimited as exc:
+            bridge.last_error = str(exc)
             delay = exc.retry_after or _backoff_delay(retry, attempt)
             log.warning(
                 "rate limited (attempt %d/%d); backing off %ds",
@@ -1340,6 +1358,7 @@ def run_cycle_with_retries(bridge: Bridge, cfg: Config, sleeper=time.sleep) -> b
             if attempt < retry.max_attempts:
                 sleeper(delay)
         except (requests.RequestException, CycleError) as exc:
+            bridge.last_error = str(exc)
             delay = _backoff_delay(retry, attempt)
             log.warning(
                 "cycle attempt %d/%d failed: %s",
@@ -1366,14 +1385,31 @@ def _backoff_delay(retry: RetryConfig, attempt: int) -> int:
 # --------------------------------------------------------------------------
 
 
-class RedactingFormatter(logging.Formatter):
-    """Formats then scrubs. Known secret values are replaced wholesale and
-    token-ish JSON fields are masked, so a debug dump of a raw API response
-    cannot leak credentials into a pasted log."""
+# Masks token/password/access_token JSON fields, so a dumped raw API
+# response or WebSocket frame cannot leak a credential even if the value is
+# not in the known-secrets list.
+_REDACT_PATTERNS = [
+    re.compile(
+        r'("(?:token|password|access_token)"\s*:\s*")[^"]*(")', re.IGNORECASE
+    ),
+]
 
-    PATTERNS = [
-        re.compile(r'("(?:token|password)"\s*:\s*")[^"]*(")', re.IGNORECASE),
-    ]
+
+def redact(text: str, secrets: list[str]) -> str:
+    """Scrub known secret values wholesale, then mask credential-ish JSON
+    fields. Shared by the log formatter and the status file's last_error so
+    both are safe to paste into a bug report."""
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    for pattern in _REDACT_PATTERNS:
+        text = pattern.sub(r"\1***\2", text)
+    return text
+
+
+class RedactingFormatter(logging.Formatter):
+    """Formats then scrubs, so a debug dump of a raw API response cannot leak
+    credentials into a pasted log."""
 
     def __init__(self, fmt: str, secrets: list[str], json_mode: bool = False):
         super().__init__(fmt)
@@ -1393,11 +1429,7 @@ class RedactingFormatter(logging.Formatter):
             )
         else:
             rendered = super().format(record)
-        for secret in self.secrets:
-            rendered = rendered.replace(secret, "***")
-        for pattern in self.PATTERNS:
-            rendered = pattern.sub(r"\1***\2", rendered)
-        return rendered
+        return redact(rendered, self.secrets)
 
 
 def setup_logging(cfg: Config, debug_override: bool) -> None:
@@ -1405,7 +1437,7 @@ def setup_logging(cfg: Config, debug_override: bool) -> None:
     handler = logging.StreamHandler(sys.stderr)
     secrets = [
         cfg.glowmarkt.password,
-        cfg.mqtt.password,
+        cfg.homeassistant.token,
     ]
     handler.setFormatter(
         RedactingFormatter(
@@ -1418,10 +1450,10 @@ def setup_logging(cfg: Config, debug_override: bool) -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level.upper())
-    # paho and urllib3 are chatty at DEBUG and their payload logging is not
-    # redacted by this formatter's secret list alone; keep them at INFO.
-    logging.getLogger("paho").setLevel(logging.INFO)
+    # urllib3 and websocket-client are chatty at DEBUG and their payload
+    # logging bypasses this formatter's secret list; keep them at INFO.
     logging.getLogger("urllib3").setLevel(logging.INFO)
+    logging.getLogger("websocket").setLevel(logging.INFO)
 
 
 # --------------------------------------------------------------------------
@@ -1449,7 +1481,8 @@ class Shutdown:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="glowbridge",
-        description="Bridge Glowmarkt/DCC smart meter readings to MQTT.",
+        description="Import Glowmarkt/DCC smart meter readings into Home"
+        " Assistant long-term statistics.",
     )
     parser.add_argument(
         "--config",
@@ -1465,7 +1498,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="fetch and print what would be published; no MQTT, no state writes",
+        help="fetch and print what would be imported; no HA import, no state writes",
+    )
+    parser.add_argument(
+        "--dump-raw",
+        action="store_true",
+        help="dump raw API rows (nulls included) to JSON for inspection;"
+        " no HA import, no state writes",
+    )
+    parser.add_argument(
+        "--from",
+        dest="dump_from",
+        default=None,
+        help="--dump-raw start timestamp, ISO (default: the backfill window)",
+    )
+    parser.add_argument(
+        "--to",
+        dest="dump_to",
+        default=None,
+        help="--dump-raw end timestamp, ISO (default: now)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="--dump-raw output file (default: glow_dump.json in the state dir)",
     )
     parser.add_argument(
         "--debug",
@@ -1496,36 +1553,94 @@ def main(argv: list[str] | None = None) -> int:
 
     client = GlowmarktClient(cfg.glowmarkt)
 
-    publisher: MqttPublisher | None = None
-    if not args.dry_run:
-        publisher = MqttPublisher(cfg.mqtt)
-        try:
-            publisher.connect()
-        except Exception as exc:
-            log.error("cannot connect to MQTT broker: %s", exc)
-            return 1
+    if args.dump_raw:
+        return dump_raw(cfg, client, state, args, state_dir)
 
-    bridge = Bridge(cfg, state, client, publisher)
+    # --dry-run imports nothing and writes no state; note the missing token
+    # so it's clear a real run would need one.
+    no_side_effects = args.dry_run
+    importer: HaImporter | None = None
+    if no_side_effects:
+        if not cfg.homeassistant.token:
+            log.info(
+                "no Home Assistant token set (%s); --dry-run does not import",
+                ENV_HA_TOKEN,
+            )
+    else:
+        importer = HaImporter(cfg.homeassistant)
 
-    if args.dry_run:
+    bridge = Bridge(cfg, state, client, importer)
+
+    if no_side_effects:
         # Dry runs must not mutate persistent state.
         state.save = lambda: None  # type: ignore[method-assign]
 
-    try:
-        if args.once or args.dry_run:
-            ok = run_cycle_with_retries(bridge, cfg)
-            if ok and publisher is not None:
-                bridge.publish_discovery()
-            return 0 if ok else 1
-        return _daemon_loop(bridge, cfg, publisher)
-    finally:
-        if publisher is not None:
-            publisher.close()
+    if args.once or args.dry_run:
+        ok = run_cycle_with_retries(bridge, cfg)
+        if not ok and importer is not None:
+            bridge.write_status(datetime.now(tz=UTC))
+        return 0 if ok else 1
+    return _daemon_loop(bridge, cfg)
 
 
-def _daemon_loop(
-    bridge: Bridge, cfg: Config, publisher: MqttPublisher | None
+def dump_raw(
+    cfg: Config,
+    client: GlowmarktClient,
+    state: StateFile,
+    args: argparse.Namespace,
+    state_dir: Path,
 ) -> int:
+    """Fetch raw, untransformed API rows (nulls included) and write them to
+    JSON for inspection. No HA import, no state writes — the debugging tool
+    that replaces the old dev_scripts/dump_readings.py."""
+    if not cfg.homeassistant.token:
+        log.info("no Home Assistant token set (%s); --dump-raw does not import", ENV_HA_TOKEN)
+    state.save = lambda: None  # type: ignore[method-assign]
+    bridge = Bridge(cfg, state, client, None)
+    now = datetime.now(tz=UTC)
+    try:
+        bridge.ensure_token(now)
+        resources = bridge.resolve_resources(now)
+    except (requests.RequestException, CycleError) as exc:
+        log.error("dump-raw failed: %s", exc)
+        return 1
+
+    start = _parse_iso(args.dump_from) if args.dump_from else bridge._seed(now)
+    end = _parse_iso(args.dump_to) if args.dump_to else now
+    output = args.output or (state_dir / "glow_dump.json")
+
+    out: dict[str, Any] = {
+        "generated_at": now.isoformat(),
+        "base_url": GLOWMARKT_BASE_URL,
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "resources": {},
+    }
+    for rid in resources:
+        rows_by_ts: dict[int, list] = {}
+        envelope: dict = {}
+        for a, b in fetch_windows(start, end):
+            rows, env = client.get_readings_raw(rid, a, b)
+            envelope = envelope or env
+            for row in rows:
+                if isinstance(row, list) and row:
+                    rows_by_ts[row[0]] = row
+        readings = [rows_by_ts[ts] for ts in sorted(rows_by_ts)]
+        out["resources"][rid] = {
+            "response_meta": envelope,
+            "reading_count": len(readings),
+            "null_count": sum(1 for r in readings if len(r) < 2 or r[1] is None),
+            "readings": readings,
+        }
+        log.info("%s: %d raw row(s)", rid, len(readings))
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    print(f"dump-raw: wrote {len(out['resources'])} resource(s) to {output}")
+    return 0
+
+
+def _daemon_loop(bridge: Bridge, cfg: Config) -> int:
     shutdown = Shutdown()
     shutdown.install()
     offset = install_offset(machine_seed(), cfg.schedule.jitter)
@@ -1538,20 +1653,14 @@ def _daemon_loop(
         cfg.schedule.finalisation_lag,
     )
 
-    first = True
     while not shutdown.requested:
         ok = run_cycle_with_retries(bridge, cfg)
         now = datetime.now(tz=UTC)
-        if ok and first and publisher is not None:
-            # Discovery needs the resource list, which may only exist after
-            # the first successful cycle.
-            bridge.publish_discovery()
-            first = False
         next_ts = next_cycle_start(time.time(), cfg.schedule.interval, offset)
         if not ok:
-            bridge.publish_failure_status(
-                now, datetime.fromtimestamp(next_ts, tz=UTC)
-            )
+            # A successful cycle writes status itself; a failed one is
+            # written here with the pushed-out next_planned_update.
+            bridge.write_status(now, datetime.fromtimestamp(next_ts, tz=UTC))
         log.info(
             "next cycle at %s",
             datetime.fromtimestamp(next_ts, tz=UTC).isoformat(),
