@@ -5,14 +5,10 @@ things that are not obvious from reading a single file: the invariants that
 must not be broken, why the code is shaped the way it is, and how to develop
 and test it. Read this before making changes.
 
-> **Direction — read first.** glowbridge is mid-pivot to **v1.0.0**, a
-> breaking rewrite from the original MQTT design to a **Home Assistant
-> long-term statistics importer** (`recorder/import_statistics` over the HA
-> WebSocket). This guide describes the **target (v2) design**. The repo may
-> still contain the retired MQTT code (`MqttPublisher`, discovery, retained
-> topics, the frontier+ledger emission core) until the rewrite lands — treat
-> that as being torn out, not as the intended shape. Rationale and the full
-> plan live in the gitignored `glowbridge/notes/DESIGN-V2.md`.
+glowbridge is a **Home Assistant long-term statistics importer**
+(`recorder/import_statistics` over the HA WebSocket), version **1.0.0**.
+Design background and the reasoning behind the shape live in the gitignored
+`glowbridge/notes/DESIGN-V2.md`.
 
 ## Repository layout
 
@@ -43,11 +39,12 @@ correctness beats data freshness everywhere.**
 Incoming data is per-window energy: each API row is `[interval_start_epoch,
 kwh]`. We fetch hourly (`period=PT1H`), keep a synthetic **monotonic
 cumulative total** per meter (integer Wh), and import hourly `{start, sum}`
-rows. HA derives each hour's consumption by differencing consecutive sums, so
-it appears in the correct hour regardless of when we import — which is the
-whole reason for the v2 pivot (MQTT `total_increasing` timed everything by
-arrival, smearing the curve). HA long-term statistics are hourly; that is the
-resolution ceiling and it's HA's, not ours.
+rows via `recorder/import_statistics`. HA derives each hour's consumption by
+differencing consecutive sums, and each row carries its true `start`, so
+consumption appears in the hour it actually happened regardless of when the
+import runs — that correct-time placement is the point of the whole design.
+HA long-term statistics are hourly; that is the resolution ceiling and it's
+HA's, not ours.
 
 ## Load-bearing invariants — do not break these
 
@@ -64,16 +61,16 @@ These encode failure analysis, not preference.
    total per hour and HA differences it. Seed the cumulative at 0 before the
    first backfilled hour so deltas are correct. The total never decreases.
 3. **Imports are idempotent and revisable — exploit it, don't fight it.** A
-   re-import overwrites. Late data and gap-fills are handled by re-importing
-   the affected contiguous slice (from the earliest changed hour forward,
-   since `sum` is cumulative). This is why v2 has **no ledger, no
-   exactly-once dance, no `heal_horizon`** — those existed only because
-   `total_increasing` could never go backwards.
+   re-import overwrites by `(statistic_id, start)`. Late data and gap-fills
+   are handled by re-importing the affected contiguous slice (from the
+   earliest changed hour forward, since `sum` is cumulative). This is why
+   there is **no exactly-once bookkeeping** — re-import does that job — and
+   why every cycle re-fetches the trailing `revision_window`.
 4. **Statistic IDs and the state-file schema are ABI.** `statistic_id`s
    (`glowbridge:electricity_consumption`, `glowbridge:gas_consumption`) are
    ABI the moment history sits behind them — renaming orphans it. Bump the
-   state `schema` int and migrate (or clean-break with a major version, as
-   v3 does from the MQTT schemas); never silently reinterpret a schema.
+   state `schema` int on a format change; an unrecognised schema is treated
+   as a fresh install, never silently reinterpreted.
 5. **Secrets never reach logs.** All output passes a redacting formatter
    (configured passwords + the HA token scrubbed, token/password JSON fields
    masked; urllib3 pinned at INFO). Debug logs must stay safe to paste into
@@ -113,8 +110,8 @@ baseline without storing per-hour energy).
 
 ## Failure-visibility model
 
-No broker, so no LWT/retained topics. v2 keeps a machine-readable signal via a
-**status file** (JSON, rewritten each cycle, path configurable) plus systemd:
+Three conditions stay distinguishable via a **status file** (`status.json`
+next to `state.json`, rewritten each cycle) plus systemd:
 
 | Condition | Signal |
 |---|---|
@@ -142,9 +139,9 @@ distinction cheap to make.
 
 ## State file
 
-- Carries a `schema` int. Migrate forward where meaningful; an *unrecognised*
-  (or retired-MQTT v1/v2) schema is treated as a fresh install, which triggers
-  the backfill (idempotent, harmless). Nothing crash-loops on bad state.
+- Carries a `schema` int. An *unrecognised* schema is treated as a fresh
+  install, which triggers the backfill (idempotent, harmless). Nothing
+  crash-loops on bad state.
 - When you change the persisted shape: bump `STATE_SCHEMA`, add migration or a
   documented clean-break, and add a test.
 
@@ -210,7 +207,8 @@ ruff check glowbridge/                  # keep clean
 
 ## Deployment (NixOS)
 
-- **No MQTT broker** — v2 imports straight to HA, so there is no broker to run.
+- **No broker or intermediate service** — glowbridge imports straight to HA
+  over WebSocket, so there is nothing else to run.
 - Secrets go in a root-only env file referenced by systemd `EnvironmentFile`
   (read as root before dropping to a `DynamicUser`), never in `configuration.nix`
   or the Nix store. Carries `GLOWBRIDGE_HA_TOKEN` and the Glow credentials.
@@ -220,16 +218,15 @@ ruff check glowbridge/                  # keep clean
 
 ## Out of scope
 
-Multi-account, InfluxDB/Prometheus outputs, half-hourly (HA statistics are
-hourly), and cost/tariff sensors are excluded. **Historical backfill is now
-in scope** — it's the first-run behaviour, enabled by the statistics-import
-pivot (it was excluded under MQTT only because arrival-time stamping made it
-useless).
+Multi-account, InfluxDB/Prometheus outputs, half-hourly resolution (HA
+statistics are hourly), and cost/tariff sensors are excluded. Historical
+backfill is *in* scope — it is the first-run behaviour (seed the frontier
+`backfill_lookback` in the past and walk forward).
 
 ## dev_scripts
 
-`glowbridge/dev_scripts/` holds one-off exploration tools, not shipped code.
-`dump_readings.py` (raw-payload dumper) is **being retired** — its capability
-moves into core as `--dump-raw` — and has been removed from CI.
-`glowbridge/dev_scripts/*.json` is gitignored: these dump raw personal
-consumption data, which must never be committed.
+`glowbridge/dev_scripts/` is where any one-off exploration tools live, not
+shipped code. Raw-payload inspection is built into the app as `--dump-raw`,
+so the directory currently holds no scripts. `glowbridge/dev_scripts/*.json`
+is gitignored: raw dumps are personal consumption data and must never be
+committed.

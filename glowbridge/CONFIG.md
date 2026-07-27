@@ -23,7 +23,7 @@ file. No other setting can be set from the environment.
 |---|---|
 | `GLOWBRIDGE_GLOW_USERNAME` | `glowmarkt.username` |
 | `GLOWBRIDGE_GLOW_PASSWORD` | `glowmarkt.password` |
-| `GLOWBRIDGE_MQTT_PASSWORD` | `mqtt.password` |
+| `GLOWBRIDGE_HA_TOKEN` | `homeassistant.token` |
 
 ## `[glowmarkt]`
 
@@ -54,69 +54,92 @@ Optional resource pin. Semantics:
   404 is a fatal cycle error, deliberately: the ID was asserted by the
   user, and silently substituting a discovered one would be wrong.
 
-Entries must be non-empty strings. Pinned resources are polled even if
-they are not consumption classifiers; the pin is trusted verbatim.
+Entries must be non-empty strings. A pinned resource's classifier is never
+looked up, so its statistic is named after the resource id
+(`glowbridge:<resource_id>`) rather than the classifier.
+
+## `[homeassistant]`
+
+### `url` — string, required
+WebSocket URL of the Home Assistant instance, e.g.
+`ws://homeassistant.local:8123/api/websocket`. Must begin with `ws://` or
+`wss://`. Plain `ws://` is correct over a trusted path — a Tailscale/mesh
+VPN link or localhost is already encrypted — so TLS on top is redundant and
+HAOS serves `:8123` in plaintext by default. Use `wss://` when the path to
+HA crosses an untrusted network.
+
+### `token` — string, required (to import)
+A Home Assistant long-lived access token (HA profile → Security →
+Long-lived access tokens → Create Token). Same environment-merge rule via
+`GLOWBRIDGE_HA_TOKEN` (env wins); included in the log redaction set. It is
+**not** validated at config load, so `--dry-run` and `--dump-raw` run
+without it; a missing token surfaces when the importer connects.
+
+glowbridge imports into external statistics named
+`glowbridge:electricity_consumption` and `glowbridge:gas_consumption`.
+These appear in the Energy dashboard's consumption picker; no entity or
+device setup is needed — the first import creates them.
 
 ## `[schedule]`
 
-### `interval` — integer seconds, default `1800`, minimum `300`
-Target spacing between poll cycles. Cycles are anchored to epoch
-multiples of `interval` (plus the install offset), not to
-process start time, so restarts do not drift the schedule. The DCC
-delivers half-hourly data at best; polling faster than the default buys
-nothing except load on a free API. The minimum is enforced.
+### `interval` — integer seconds, default `1800`, minimum `1800`
+Target spacing between poll cycles. Cycles are anchored to epoch multiples
+of `interval` (plus the install offset), not to process start time, so
+restarts do not drift the schedule. The DCC is half-hourly at best, so
+polling faster than 30 minutes buys nothing except load on a free API; the
+minimum is enforced.
 
 ### `jitter` — integer seconds, default `300`, minimum `0`
 Width of the per-install schedule offset window. The actual offset is
 deterministic: `sha256(machine-id) mod (jitter + 1)`, computed from
 `/etc/machine-id` (falling back to `/var/lib/dbus/machine-id`, then the
 hostname). A given machine always polls at the same second past the
-boundary; different machines are spread uniformly across the window.
-`0` disables the offset entirely. The offset is logged at startup and
-reflected in `next_planned_update`.
+boundary; different machines are spread uniformly across the window. `0`
+disables the offset entirely. The offset is logged at startup and reflected
+in the status file's `next_planned_update`.
 
 ### `finalisation_lag` — integer seconds, default `5400`, minimum `0`
-An interval is published only once its end time is at least this far in
-the past. Freshly delivered DCC data can be revised; once an interval is
-folded into the cumulative total it is never revisited, so this lag is
-the revision guard. The default (90 minutes) covers typical revision
-behaviour. Raising it delays data; lowering it below ~3600 risks
-publishing values the DCC subsequently changes, which the bridge will
-not correct. `0` is permitted for testing against fixtures and is not
-suitable for live use.
+An hour is imported only once its end time is at least this far in the
+past, keeping the freshest, most-volatile hour out until it settles. Unlike
+older designs this is not a correctness guard — a later revision is simply
+re-imported (see `revision_window`) — but it avoids churning on data the
+DCC is still finalising. The default is 90 minutes. `0` imports right up to
+the current hour boundary.
 
-### `heal_horizon` — integer seconds, default `604800` (7 days), must exceed `finalisation_lag`
-How long a missing half-hour is tolerated before the completeness frontier
-gives up on it.
+### `backfill_lookback` — integer seconds, default `31536000` (365 days), minimum `0`
+On a fresh install (no prior state) each meter's frontier is seeded this
+far in the past, so the first run backfills that much history — a year of
+correctly-timed hourly consumption on the Energy dashboard from day one.
+Ignored once state exists (the stored frontier rules). Because imports are
+idempotent, losing the state file and re-seeding just re-imports the same
+window harmlessly.
 
-Emission tracks a contiguous frontier (the watermark, published as
-`data_complete_to`) plus a ledger of windows already emitted *ahead* of it.
-When the DCC is missing a half-hour, later windows are still emitted
-immediately and recorded in the ledger — consumption is never withheld —
-but the frontier holds at the gap, because everything up to the frontier is
-what is provably complete. If the missing window later arrives it is
-emitted exactly once and the frontier sweeps forward, draining the ledger.
+### `revision_window` — integer seconds, default `604800` (7 days), must be >= `finalisation_lag`
+The trailing span re-fetched and re-imported every cycle. The DCC revises
+recently delivered data and backfills gaps days late; re-importing this
+window each cycle lets those corrections overwrite the affected hours
+(imports are idempotent, keyed by hour). Data older than the window is
+never re-fetched — the frontier has settled past it — so a DCC backfill
+arriving *later* than `revision_window` is permanently missed. Observed DCC
+backfills run to ~5 days, hence the 7-day default; re-importing ~168 hourly
+rows per meter per cycle is negligible. It must cover at least
+`finalisation_lag`, or a revision to a just-finalised hour would never be
+re-checked.
 
-`heal_horizon` bounds that wait. A gap older than this is abandoned: the
-frontier steps over it, permanently losing that one half-hour from the
-cumulative total, so a window the DCC never delivers cannot freeze
-`data_complete_to` forever (and the ledger stays bounded to roughly this
-span). It must be larger than `finalisation_lag` — a window has to outlive
-its revision guard before it can be written off. Raise it to give a
-chronically slow feed more time to backfill at the cost of `data_complete_to`
-lagging longer before it gives up; lower it to advance the completeness
-signal sooner at the cost of writing off recoverable gaps.
-
-Abandonment is logged loudly: each cycle that writes windows off emits a
-single `WARNING` naming how many were abandoned and the frontier's old and
-new positions, so the permanent loss is visible without one log line per
-lost half-hour.
+### `catchup_stale_after` — integer seconds, default `86400` (1 day), minimum `0`
+How long a meter may go without new data before glowbridge nudges the DCC
+via the `catchup` endpoint. When `now - data_complete_to` exceeds this, and
+no catchup has fired in the last 30 minutes (the API's documented limit,
+persisted so a restart cannot exceed it), one best-effort nudge is sent.
+The default sits well above the DCC's normal few-hours delay, so it fires
+only on genuinely abnormal staleness. catchup is best effort — it times out
+routinely and never fails a cycle.
 
 ## `[retry]`
 
 Retries operate within a cycle. A cycle that exhausts its budget is
-skipped — the daemon logs it, publishes failure status, and waits for the
-next scheduled cycle. Cycle failure is never fatal to the daemon.
+skipped — the daemon logs it, writes failure status, and waits for the next
+scheduled cycle. Cycle failure is never fatal to the daemon.
 
 ### `max_attempts` — integer, default `5`, minimum `1`
 Attempts per cycle before it is abandoned.
@@ -130,94 +153,36 @@ incident retry decorrelated. An HTTP 429 with a `Retry-After` header
 overrides the computed delay with the server's value.
 
 ### `auth_floor` — integer seconds, default `3600`, minimum `0`
-Minimum time between authentication attempts, enforced regardless of
+Minimum time between Glow authentication attempts, enforced regardless of
 outcome and persisted in the state file, so it holds across restarts and
-crash loops. When a cycle needs a token and the floor is not met, the
-cycle fails immediately (no in-cycle retry can help) and auth is retried
-no earlier than the floor allows. Within a cycle, at most one
-re-authentication is attempted in response to a rejected token. Raise
-this if Hildebrand rate-limit the account; lowering it below 600 invites
-account lockout.
-
-## `[mqtt]`
-
-### `host` — string, default `"localhost"`, must be non-empty
-### `port` — integer, default `1883`, range 1–65535
-Broker address. The port is not switched automatically when TLS is
-enabled; set `8883` (or your broker's TLS port) explicitly.
-
-### `username` — string, default `""`
-### `password` — string, default `""`
-Broker credentials; both empty means anonymous. The password can come
-from `GLOWBRIDGE_MQTT_PASSWORD` and is included in the log redaction set.
-
-### `client_id` — string, default `"glowbridge"`
-MQTT client identifier. Must be unique per broker; change it when running
-multiple instances (e.g. one per Bright account) against one broker.
-
-### `topic_prefix` — string, default `"glowbridge"`
-Root of the topic layout: `{prefix}/{resource_id}/state`,
-`{prefix}/{resource_id}/status`, `{prefix}/bridge/availability`,
-`{prefix}/bridge/status`. Must be non-empty and contain no `#` or `+`.
-Changing it after Home Assistant has discovered the entities requires the
-retained discovery configs to be republished, which happens on the next
-successful first cycle after restart.
-
-### `discovery_prefix` — string, default `"homeassistant"`
-Prefix for Home Assistant MQTT discovery config topics. Must match the
-`discovery_prefix` configured in HA's MQTT integration (default
-`homeassistant`).
-
-### `qos` — integer, default `1`, accepted `0` or `1`
-QoS for every publish, including discovery and Last Will. At `1`, each
-publish waits up to 10 seconds for broker acknowledgement and an
-unacknowledged publish fails the cycle (state is already persisted; the
-publish is retried by the next cycle as part of normal catch-up). At `0`,
-publishes are fire-and-forget and broker loss is only visible via the
-Last Will. QoS 2 is not supported.
-
-## `[mqtt.tls]`
-
-### `enabled` — boolean, default `false`
-Enables TLS on the broker connection. Setting any other key in this table
-while `enabled = false` is a config error, so a half-configured TLS
-section fails fast instead of silently connecting in plaintext.
-
-### `ca_cert` — string path, default `""`
-PEM CA bundle used to verify the broker. Empty uses the system trust
-store — correct for brokers with certificates from a public CA; set a
-path for a private CA.
-
-### `client_cert` / `client_key` — string paths, default `""`
-Client certificate and key for mutual TLS. Must be set together; setting
-one without the other is a config error.
-
-### `insecure_skip_verify` — boolean, default `false`
-Disables broker certificate verification while keeping encryption.
-Deliberately ugly name. Lab use only: with verification off, anyone on
-the path can impersonate the broker and read half-hourly occupancy data.
+crash loops. When a cycle needs a token and the floor is not met, the cycle
+fails immediately (no in-cycle retry can help) and auth is retried no
+earlier than the floor allows. Within a cycle, at most one
+re-authentication is attempted in response to a rejected token. Raise this
+if Hildebrand rate-limit the account; lowering it below 600 invites account
+lockout. (This governs the Glow API token only; the HA token is a
+long-lived token supplied via config/env.)
 
 ## `[state]`
 
 ### `dir` — string path, default `""`
-Directory holding `state.json` — per-resource frontier watermark and
-emitted-window ledger, cumulative totals (integer watt-hours), the cached
-auth token and the discovered resource cache. Resolution when empty, in
-order:
+Directory holding `state.json` (the per-resource settled frontier,
+cumulative baseline in integer watt-hours, `data_complete_to`, catchup
+timestamp, cached Glow auth token and discovered resource cache) and
+`status.json` (see the README). Resolution when empty, in order:
 
 1. `$STATE_DIRECTORY` (set by systemd for units declaring
    `StateDirectory=`; the first entry if multiple)
 2. `$XDG_STATE_HOME/glowbridge`
 3. `~/.local/state/glowbridge`
 
-The file is written atomically (temp file, fsync, rename) with mode
-`0600`, since it contains the API token. It carries a `schema` version and
-is migrated forward in place on upgrade (preserving cumulative totals, so
-an upgrade emits no spurious meter-reset); an *unrecognised* schema, or a
-missing, unreadable or corrupt file, is logged and treated as a fresh
-install: watermarks reseed 24 hours before the current run, the cumulative
-total restarts, and Home Assistant records a single meter-reset event.
-Nothing crash-loops on bad state.
+`state.json` is written atomically (temp file, fsync, rename) with mode
+`0600`, since it contains the Glow API token. It carries a `schema`
+version; a missing, unreadable, corrupt, or unrecognised-schema file is
+logged and treated as a fresh install, which reseeds the frontier
+`backfill_lookback` in the past and re-runs the backfill. Because imports
+are idempotent this re-imports the same hours harmlessly rather than
+crash-looping. `status.json` is observability only — it is never read back.
 
 ## `[logging]`
 
@@ -230,9 +195,9 @@ applies, so debug output is safe to attach to an issue.
 `text` is `timestamp level logger: message` on stderr. `json` emits one
 object per line (`ts`, `level`, `logger`, `msg`) for log shippers.
 
-Regardless of level and format, every log line is scrubbed: the
-configured Bright and MQTT passwords are replaced with `***` wherever
-they appear, and `"token"`/`"password"` fields inside logged JSON
-payloads are masked. The `paho` and `urllib3` loggers are held at INFO
+Regardless of level and format, every log line is scrubbed: the configured
+Bright password and HA token are replaced with `***` wherever they appear,
+and `"token"`/`"password"`/`"access_token"` fields inside logged JSON
+payloads are masked. The `urllib3` and `websocket` loggers are held at INFO
 even under `--debug` because their payload logging bypasses this
 formatter's secret list.

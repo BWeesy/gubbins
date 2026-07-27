@@ -1,5 +1,5 @@
 name: glowbridge bug report
-description: Report a problem with the glowbridge Glowmarkt/DCC to MQTT bridge
+description: Report a problem with glowbridge (Glowmarkt/DCC to Home Assistant statistics importer)
 labels: ["bug", "glowbridge"]
 body:
   - type: markdown
@@ -12,9 +12,10 @@ body:
         `data_complete_to` is hours behind, the bridge is working and the DCC is
         behind — and nothing downstream can conjure data the DCC has not sent.
 
-        **Debug logs are safe to paste.** All output passes a redacting
-        formatter: your Bright password, MQTT password and API token are
-        replaced with `***`, including at debug level.
+        **Debug output and `status.json` are safe to paste.** All log output
+        passes a redacting formatter (Bright password and HA token replaced
+        with `***`, even at debug level), and `status.json` holds no secrets.
+        **Do not paste `state.json`** — it contains your Glow auth token.
 
   - type: dropdown
     id: bright-app
@@ -44,7 +45,7 @@ body:
     attributes:
       label: glowbridge version
       description: "Output of: uv run --script glowbridge.py --version"
-      placeholder: glowbridge 0.1.0
+      placeholder: glowbridge 1.0.0
     validations:
       required: true
 
@@ -60,23 +61,17 @@ body:
       required: true
 
   - type: textarea
-    id: mqtt-status
+    id: status-file
     attributes:
-      label: Retained MQTT status topics
+      label: status.json
       description: >-
-        Run `mosquitto_sub -v -t 'glowbridge/#'` (Ctrl+C after a few seconds) and
-        paste the lines for these retained topics — they carry the triage
-        information:
-
-          - `<prefix>/bridge/availability` — online / offline (Last Will)
-          - `<prefix>/bridge/status` — bridge-level JSON summary
-          - `<prefix>/<resource_id>/status` — per-meter JSON: `data_complete_to`,
-            `last_success`, `next_planned_update`, `consecutive_failures`
-
-        `<prefix>` is your `mqtt.topic_prefix` (default `glowbridge`). The
-        `<prefix>/<resource_id>/state` topic is **not** retained, so it will not
-        appear here — that is expected, not the problem.
-      render: text
+        Paste `status.json` from the state directory (next to `state.json`;
+        default `~/.local/state/glowbridge/` or `$STATE_DIRECTORY` under
+        systemd). It carries the triage information — `last_success`,
+        `consecutive_failures`, `last_error`, and per-meter `data_complete_to`
+        — and holds no secrets. Do NOT paste `state.json`, which contains the
+        auth token.
+      render: json
     validations:
       required: false
 

@@ -1,7 +1,7 @@
 # glowbridge example configuration.
 # Copy to ~/.config/glowbridge/glowbridge.toml and chmod 600 if credentials
 # are stored inline. Every value shown is the default unless marked
-# REQUIRED. Full reference: docs/CONFIG.md.
+# REQUIRED. Full reference: CONFIG.md.
 
 [glowmarkt]
 # Bright app credentials. REQUIRED here or via GLOWBRIDGE_GLOW_USERNAME /
@@ -17,19 +17,35 @@ password = ""
 # that does not exist is a fatal error. Leave unset to auto-discover.
 #resources = ["1f31f05e-2cec-4cf8-b705-43294d6a7a96"]
 
+[homeassistant]
+# WebSocket URL of the Home Assistant instance. REQUIRED.
+# Plain ws:// is correct over a trusted path (Tailscale, localhost); the
+# link is already encrypted there. Use wss:// over an untrusted network.
+url = "ws://homeassistant.local:8123/api/websocket"
+# Long-lived access token (HA profile -> Security -> Long-lived access
+# tokens). REQUIRED to import; prefer GLOWBRIDGE_HA_TOKEN over inline.
+token = ""
+
 [schedule]
-# Seconds between poll cycles. Minimum 300.
+# Seconds between poll cycles. Minimum 1800 (30 min): the DCC is half-hourly
+# at best, so polling faster only adds load.
 interval = 1800
 # Maximum per-install schedule offset in seconds, derived deterministically
 # from the machine ID. Spreads load across installs; 0 disables.
 jitter = 300
-# Only intervals older than this many seconds are published. Guards
-# against DCC revisions to freshly delivered data.
+# An hour is not imported until its end is this many seconds in the past,
+# keeping the freshest, most-volatile hour out until it settles.
 finalisation_lag = 5400
-# How long a missing half-hour is waited on before the completeness
-# frontier steps over it (losing that one window) so it cannot stall
-# forever. Must exceed finalisation_lag. Default is 7 days.
-heal_horizon = 604800
+# Fresh-install backfill window: on first run each meter is backfilled this
+# far (default 365 days) so a year of history lands on the Energy dashboard.
+backfill_lookback = 31536000
+# Trailing span re-fetched and re-imported every cycle, so DCC revisions and
+# late gap-fills self-correct. Data older than this is never re-fetched, so
+# a backfill arriving later than this is missed. Must be >= finalisation_lag.
+revision_window = 604800
+# How stale a meter must be (no new data for this long) before glowbridge
+# nudges the DCC via the catchup endpoint. Default 1 day.
+catchup_stale_after = 86400
 
 [retry]
 # In-cycle retry budget; when exhausted the cycle is skipped, not fatal.
@@ -41,33 +57,10 @@ backoff_max = 1800
 # restarts. Protects the Bright account from lockout.
 auth_floor = 3600
 
-[mqtt]
-host = "localhost"          # REQUIRED in practice
-port = 1883
-username = ""
-password = ""               # or GLOWBRIDGE_MQTT_PASSWORD
-client_id = "glowbridge"
-# Topic layout: {topic_prefix}/{resource_id}/state and /status, plus
-# {topic_prefix}/bridge/availability and /status.
-topic_prefix = "glowbridge"
-# Home Assistant MQTT discovery prefix; match HA's configuration.
-discovery_prefix = "homeassistant"
-qos = 1
-
-[mqtt.tls]
-enabled = false
-# PEM paths. Empty ca_cert uses the system trust store. client_cert and
-# client_key must be set together (mutual TLS).
-ca_cert = ""
-client_cert = ""
-client_key = ""
-# Disables certificate verification. Never use outside a lab.
-insecure_skip_verify = false
-
 [state]
-# Directory for state.json (watermarks, cumulative totals, auth token).
-# Empty resolves to $STATE_DIRECTORY (systemd), then $XDG_STATE_HOME,
-# then ~/.local/state/glowbridge.
+# Directory for state.json (settled frontier, cumulative baseline, auth
+# token) and status.json. Empty resolves to $STATE_DIRECTORY (systemd), then
+# $XDG_STATE_HOME, then ~/.local/state/glowbridge.
 dir = ""
 
 [logging]
