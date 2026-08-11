@@ -349,7 +349,7 @@ class TestStateFile:
         assert reloaded.token == "secret-token"
 
     def test_old_schema_starts_fresh(self, tmp_path):
-        # A schema-2 (MQTT-era) file is not migrated: treated as fresh, which
+        # A superseded-schema file is not migrated: treated as fresh, which
         # triggers a backfill on next run.
         old = {
             "schema": 2,
