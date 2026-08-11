@@ -1,7 +1,5 @@
 {
-  description =
-    "gubbins: home tools, including glowbridge (Glowmarkt/DCC smart meter"
-    + " readings into Home Assistant statistics)";
+  description = "gubbins: home tools, including glowbridge (Glowmarkt/DCC smart meter readings into Home Assistant statistics)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
