@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+#
+# Monzo CSV export profile. Column layout only.
+#
+# Export header (18 columns):
+#   Transaction ID, Date, Time, Type, Name, Emoji, Category, Amount, Currency,
+#   Local amount, Local currency, Notes and #tags, Address, Receipt,
+#   Description, Category split, Money Out, Money In
+#
+# Layout notes:
+#   * No running-balance column. The §5a balance-diff reconciliation is
+#     therefore unavailable for Monzo; net delta comes from flow sums, or supply
+#     an opening_balance + as_of anchor on the account for absolute balances.
+#   * `Amount` is signed and in GBP (the account currency) even for a
+#     foreign-currency purchase, whose local figure sits in `Local amount` /
+#     `Local currency` (which we ignore). `Currency` is asserted == GBP.
+#   * `Description` is blank on peer transfers, so the parser falls back to
+#     `Name`.
+#   * `Transaction ID` is a stable unique id; folding it into the dedup key
+#     keeps two same-day, same-amount, same-description purchases distinct.
+
+name: monzo
+format: csv
+encoding: utf-8
+
+# Monzo exposes a stable per-transaction id, so key dedup on it: genuine
+# same-day, same-amount, same-payee purchases stay distinct, and re-uploads are
+# still idempotent. It is the only strategy so far; banks without a stable id
+# will get their own strategy when they are added.
+dedup_strategy: source_id
+
+id_column: "Transaction ID"
+date_column: "Date"
+date_format: "%d/%m/%Y"
+time_column: "Time"
+signed_amount_column: "Amount"
+currency_column: "Currency"
+name_column: "Name"
+description_column: "Description"
+category_hint_column: "Category"

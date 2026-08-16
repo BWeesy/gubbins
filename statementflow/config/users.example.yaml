@@ -1,0 +1,25 @@
+# StatementFlow users -- EXAMPLE (synthetic data only).
+#
+# Copy to users.yaml (which is gitignored) and edit with real values. `id` is a
+# stable key that accounts reference via their `owners` list; keep it short and
+# lowercase. `name` is display-only.
+#
+# `email` is OPTIONAL and is the access allowlist. It must be the login
+# `tailscale serve` reports for that person -- the account they signed in to
+# Tailscale with (e.g. their Google address). Check yours with:
+#
+#     tailscale status --json | grep -i loginname
+#
+# As soon as ANY user has an email, the app serves only callers whose identity
+# matches one of them; everyone else gets a 403. That matters if your tailnet
+# has other people, shared nodes or guest devices on it. Leave every email out
+# and the tailnet itself stays the only boundary (any tailnet user is allowed).
+#
+# The user list is data, not code -- add or remove people here, never in the app.
+users:
+  - id: alice
+    name: Alice Example
+    email: alice@example.com
+  - id: bob
+    name: Bob Example
+    email: bob@example.com

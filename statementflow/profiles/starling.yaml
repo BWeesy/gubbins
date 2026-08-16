@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+#
+# Starling Bank CSV export profile. Column layout only.
+#
+# Export header (6 columns):
+#   Date, Counter Party, Reference, Type, Amount (GBP), Balance (GBP)
+#
+# Layout notes:
+#   * Single signed Amount (GBP); running Balance (GBP) present.
+#   * Counter Party is the payee/merchant name.
+
+name: starling
+format: csv
+encoding: utf-8
+
+dedup_strategy: running_balance
+payee_strategy: name_or_description
+
+date_column: "Date"
+date_format: "%d/%m/%Y"
+signed_amount_column: "Amount (GBP)"
+balance_column: "Balance (GBP)"
+name_column: "Counter Party"
+description_column: "Reference"
+category_hint_column: "Type"

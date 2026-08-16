@@ -1,0 +1,3 @@
+Transaction ID,Date,Time,Type,Name,Emoji,Category,Amount,Currency,Local amount,Local currency,Notes and #tags,Address,Receipt,Description,Category split,Money Out,Money In
+tx_SYNTHJ00001,04/05/2026,10:00:00,Monzo-to-Monzo,Alice Example,,Transfers,200.00,GBP,200.00,GBP,,,,,,,200.00
+tx_SYNTHJ00002,04/05/2026,10:01:30,Faster payment,Someone Else,,Transfers,200.00,GBP,200.00,GBP,,,,DECOY SAME DAY SAME AMOUNT,,,200.00

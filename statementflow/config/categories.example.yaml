@@ -1,0 +1,38 @@
+# StatementFlow categories -- EXAMPLE (synthetic).
+#
+# Copy to categories.yaml (gitignored) to configure the buckets the Sankey splits
+# into and that rules/review can assign. `kind` is 'outflow' (spending; the
+# default) or 'income' (money in). Add your own.
+#
+# transfer, other, income and uncategorised are STRUCTURAL and always exist:
+#   * transfer comes from pairing; uncategorised marks a row awaiting review;
+#   * other is the generic outflow bucket (default for an unmatched debit);
+#   * income is the generic income bucket (default for an unmatched credit).
+# A category id here may not reuse one of those reserved ids.
+#
+# If categories.yaml is absent, the defaults are savings/bills/investment
+# (all outflow), and income is a single generic bucket.
+categories:
+  # --- outflow (spending) ---
+  - id: savings
+    label: Savings
+  - id: investment
+    label: Investment
+  - id: mortgage
+    label: Mortgage
+  - id: energy
+    label: Energy
+  - id: tv
+    label: TV & Streaming
+  - id: groceries
+    label: Groceries
+  # --- income ---
+  - id: salary
+    label: Salary
+    kind: income
+  - id: refund
+    label: Refunds
+    kind: income
+  - id: benefits
+    label: Benefits
+    kind: income

@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+#
+# Bank of Scotland CSV export profile. Column layout only. Lloyds Banking Group;
+# same export layout as Lloyds.
+#
+# Export header (8 columns):
+#   Transaction Date, Transaction Type, Sort Code, Account Number,
+#   Transaction Description, Debit Amount, Credit Amount, Balance
+#
+# Layout notes:
+#   * Separate Debit Amount / Credit Amount columns (positive magnitudes).
+#   * Running Balance present; no transaction-id column; rows newest-first.
+
+name: bankofscotland
+format: csv
+encoding: utf-8
+reverse: true
+
+dedup_strategy: running_balance
+payee_strategy: name_or_description
+
+date_column: "Transaction Date"
+date_format: "%d/%m/%Y"
+debit_column: "Debit Amount"
+credit_column: "Credit Amount"
+balance_column: "Balance"
+description_column: "Transaction Description"
+category_hint_column: "Transaction Type"

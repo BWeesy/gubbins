@@ -1,0 +1,86 @@
+name: statementflow
+
+on:
+  push:
+    paths:
+      - 'statementflow/**'
+      - '.github/workflows/statementflow.yml'
+  pull_request:
+    paths:
+      - 'statementflow/**'
+      - '.github/workflows/statementflow.yml'
+  schedule:
+    # Pinned dependencies do not change, but advisories against them do.
+    # Re-audit weekly so a newly published CVE surfaces on its own.
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # gubbins is a PUBLIC repo. This gate fails the build if anything that must
+  # stay private has been committed, independently of .gitignore (a forced add
+  # or a mis-scoped ignore would otherwise slip through). Runs at repo root.
+  no-private-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: No real financial data is tracked
+        run: |
+          # Private-by-definition paths: real (non-example) config, learned
+          # rules, the DB, uploads, retained raw statements.
+          private=$(git ls-files -- \
+            'statementflow/config/*.yaml' \
+            'statementflow/**/rules.learned.yaml' \
+            'statementflow/data/**' \
+            'statementflow/uploads/**' \
+            'statementflow/raw/**' \
+            '*.db' '*.sqlite' '*.sqlite3' \
+            | grep -v '\.example\.yaml$' || true)
+          # Statement files are allowed ONLY as named synthetic fixtures. The
+          # exemption is a filename pattern, not the whole fixtures directory:
+          # a real export dropped in there must still fail this gate.
+          statements=$(git ls-files -- \
+            'statementflow/**/*.csv' 'statementflow/**/*.ofx' \
+            'statementflow/**/*.qif' 'statementflow/**/*.xls' \
+            'statementflow/**/*.xlsx' 'statementflow/**/*.pdf' \
+            | grep -vE '^statementflow/tests/fixtures/[a-z0-9_]+_synthetic\.csv$' || true)
+          if [ -n "${private}${statements}" ]; then
+            echo "::error::Private/financial data must not be committed to this public repo:"
+            printf '%s\n' "${private}" "${statements}"
+            exit 1
+          fi
+          echo "OK: no private or financial data is tracked."
+
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: statementflow
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        # Pinned exact: setup-uv does not publish a moving major tag. Node 24.
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: 'statementflow/uv.lock'
+
+      # Ruff pinned so a new release can't fail CI on an unrelated push.
+      - name: Lint
+        run: uvx ruff@0.15.22 check .
+
+      # --locked fails if uv.lock and pyproject.toml have drifted, so this
+      # doubles as the "did you forget to re-lock?" gate.
+      - name: Tests
+        run: uv run --locked pytest
+
+      # Audit the exact resolved dependency set for known advisories.
+      # pip-audit exits non-zero on a finding, failing the build by design.
+      - name: Audit dependencies
+        run: |
+          uv export --frozen --no-emit-project --format requirements-txt \
+            > "${RUNNER_TEMP}/sf-requirements.txt"
+          uvx pip-audit -r "${RUNNER_TEMP}/sf-requirements.txt"

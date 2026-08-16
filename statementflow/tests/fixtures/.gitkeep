@@ -1,0 +1,3 @@
+# Synthetic statement fixtures live here. They are the ONLY statement files the
+# repo tracks -- .gitignore re-includes this tree while ignoring statement files
+# everywhere else. Never place a real statement here.

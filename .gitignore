@@ -230,3 +230,37 @@ glowbridge/dev_scripts/*.json
 # Working notes / design drafts: may contain deployment specifics (IPs,
 # hostnames) we don't want in public history.
 glowbridge/notes/
+
+# statementflow: this is a PUBLIC repo. Real financial data must NEVER be
+# committed. Bank *profiles* (column layouts) are public and tracked; real
+# accounts/users/rules, the DB, uploads and retained raw statements are not.
+
+# Real config: only the *.example.yaml templates are committed.
+statementflow/config/*.yaml
+!statementflow/config/*.example.yaml
+# App-written learned rules mirror real payees -> keep them private.
+statementflow/**/rules.learned.yaml
+# Runtime state: the DB, uploaded statements, retained raw statements (kept
+# locally so imports can be re-run), and any anonymised export used to
+# confirm a profile.
+statementflow/data/
+statementflow/uploads/
+statementflow/raw/
+statementflow/**/*.db
+statementflow/**/*.sqlite
+statementflow/**/*.sqlite3
+# Statement files in ANY format, wherever they land, are treated as real
+# financial data and ignored -- EXCEPT the synthetic fixtures under
+# tests/fixtures/, which are re-included immediately below.
+statementflow/**/*.csv
+statementflow/**/*.ofx
+statementflow/**/*.qif
+statementflow/**/*.xls
+statementflow/**/*.xlsx
+statementflow/**/*.pdf
+# Re-include ONLY the synthetic fixtures, by name. Deliberately narrow: a
+# blanket un-ignore of tests/fixtures/ would silently track a real export
+# dropped in there, which is exactly the accident this block exists to stop.
+!statementflow/tests/fixtures/*_synthetic.csv
+# Local uv virtualenv for the module.
+statementflow/.venv/

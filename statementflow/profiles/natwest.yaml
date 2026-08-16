@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+#
+# NatWest current-account CSV export profile. Column layout only.
+#
+# Export header (7 columns):
+#   Date, Type, Description, Value, Balance, Account Name, Account Number
+#
+# Layout notes:
+#   * Rows are newest-first; `reverse: true` flips them to chronological order so
+#     seq and opening/closing derive correctly.
+#   * No transaction-id column, but a running `Balance`. Dedup keys on
+#     (account, date, amount, balance): two identical same-day rows leave
+#     different balances and stay distinct. The balance also enables the §5a
+#     reconciliation check.
+#   * `Value` is a single signed column (debits negative). No currency column;
+#     all GBP.
+#   * No merchant Name column; the payee sits inside the comma-structured
+#     `Description`, so `payee_strategy: delimited_description` extracts it (drop
+#     the "1234 30JUN26" card/date prefix and the trailing location).
+#   * `Type` is a bank code (POS, TFR, S/O, D/D, BAC, ...), fed in as a hint.
+
+name: natwest
+format: csv
+encoding: utf-8
+
+reverse: true
+dedup_strategy: running_balance
+payee_strategy: delimited_description
+
+date_column: "Date"
+date_format: "%d %b %Y"
+signed_amount_column: "Value"
+balance_column: "Balance"
+description_column: "Description"
+category_hint_column: "Type"

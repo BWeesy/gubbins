@@ -1,0 +1,152 @@
+/* SPDX-License-Identifier: MIT
+   StatementFlow — dark "Tron" theme. This app is always dark; there is no light
+   theme. Neon accents on near-black, with subtle glow. */
+
+:root {
+  color-scheme: dark;
+  --bg: #05070d;
+  --panel: #0a0f18;
+  --panel-2: #0e1622;
+  --border: rgba(0, 229, 255, 0.20);
+  --border-strong: rgba(0, 229, 255, 0.55);
+  --text: #cfe3f6;
+  --muted: #63788f;
+  --heading: #eafcff;
+  --cyan: #00e5ff;
+  --magenta: #ff36c9;
+  --lime: #7cff5a;
+  --amber: #ffb020;
+  --purple: #b388ff;
+  --pos: #24ff9e;
+  --neg: #ff2e63;
+  --glow: 0 0 8px rgba(0, 229, 255, 0.35);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Faint Tron grid + corner glows behind everything. */
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(1100px 560px at 82% -12%, rgba(0, 229, 255, 0.07), transparent 60%),
+    radial-gradient(900px 500px at -5% 112%, rgba(255, 54, 201, 0.06), transparent 60%),
+    linear-gradient(transparent 95%, rgba(0, 229, 255, 0.045) 96%) 0 0 / 100% 30px,
+    linear-gradient(90deg, transparent 95%, rgba(0, 229, 255, 0.045) 96%) 0 0 / 30px 100%,
+    var(--bg);
+}
+
+main { max-width: 74rem; margin: 1.5rem auto; padding: 0 1rem; }
+main.review { max-width: 64rem; }
+
+h1 {
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--heading);
+  text-shadow: 0 0 14px rgba(0, 229, 255, 0.55), 0 0 3px rgba(0, 229, 255, 0.8);
+}
+
+a { color: var(--cyan); text-decoration: none; }
+a:hover { text-shadow: var(--glow); }
+
+.muted { color: var(--muted); }
+.warn { color: var(--neg); }
+
+input, select, button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+}
+input:focus, select:focus { outline: none; border-color: var(--cyan); box-shadow: var(--glow); }
+input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.85) hue-rotate(150deg); }
+input[type="checkbox"] { accent-color: var(--cyan); }
+
+button {
+  cursor: pointer;
+  color: var(--cyan);
+  border-color: var(--border-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.78rem;
+}
+button:hover { border-color: var(--cyan); box-shadow: var(--glow); }
+
+/* Card / panel surfaces. */
+.tile {
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  min-width: 9.5rem;
+  box-shadow: inset 0 0 24px rgba(0, 229, 255, 0.05);
+}
+.tile .name { font-weight: 600; display: flex; align-items: center; gap: 0.4rem; }
+.tile .net {
+  font-size: 1.4rem;
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-variant-numeric: tabular-nums;
+  margin: 0.15rem 0;
+}
+.tile .sub { color: var(--muted); font-size: 0.78rem; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.6rem 0.85rem;
+}
+
+#chart, #charts > div > div { border-radius: 10px; }
+#charts {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.4rem;
+  box-shadow: inset 0 0 40px rgba(0, 229, 255, 0.04);
+}
+
+table { border-collapse: collapse; width: 100%; }
+th { text-align: left; color: var(--muted); font-weight: 600; }
+th, td { border-bottom: 1px solid rgba(0, 229, 255, 0.12); padding: 0.3rem 0.5rem; }
+
+.swatch {
+  display: inline-block;
+  width: 0.8rem; height: 0.8rem;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-right: 0.35rem;
+}
+
+/* Money figures read as data. */
+.mono { font-family: ui-monospace, "SFMono-Regular", monospace; font-variant-numeric: tabular-nums; }
+
+/* Wide content (the review table, the drill-down) scrolls inside its own box
+   rather than forcing the page to scroll sideways. */
+.scroll, .panel { overflow-x: auto; }
+.chart { min-width: 0; }
+
+/* --- mobile ----------------------------------------------------------- */
+@media (max-width: 640px) {
+  main { margin: 0.5rem auto; padding: 0 0.7rem; }
+  h1 { font-size: 1.55rem; letter-spacing: 0.06em; }
+  /* Tiles fill the width, two-up. */
+  #tiles { gap: 0.5rem; }
+  #tiles .tile { flex: 1 1 42%; min-width: 0; }
+  /* A Sankey needs width to stay legible: give the chart a floor and let its
+     frame scroll horizontally on a narrow screen. */
+  #charts { overflow-x: auto; }
+  .chart { min-width: 560px; }
+  /* Bigger tap targets. */
+  input, select, button { padding: 0.45rem 0.55rem; }
+}
