@@ -1,0 +1,85 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT
+  StatementFlow upload page: pick an account, pick a CSV export, POST /upload.
+  The account decides the bank profile (how to parse) and the owner. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StatementFlow — Upload</title>
+  <link rel="stylesheet" href="/static/theme.css">
+</head>
+<body>
+<main style="max-width: 40rem;">
+  <h1>Upload statement</h1>
+  <p class="muted">Pick the account the export is from, choose its CSV file, and import.
+     Re-uploading an overlapping export is safe — duplicates are ignored.</p>
+
+  <div class="panel" style="margin-top: 1rem;">
+    <label style="display:block;margin-bottom:0.6rem;">
+      Account<br>
+      <select id="account" style="width:100%;margin-top:0.25rem;"></select>
+    </label>
+    <label style="display:block;margin-bottom:0.8rem;">
+      CSV file<br>
+      <input type="file" id="file" accept=".csv,text/csv" style="width:100%;margin-top:0.25rem;">
+    </label>
+    <button id="go">Import</button>
+    <div id="result" style="margin-top:0.8rem;"></div>
+  </div>
+
+  <p style="margin-top:1rem;"><a href="/">← Back to the flow</a> · <a href="/static/review.html">Review queue →</a></p>
+
+  <script>
+    const els = (id) => document.getElementById(id);
+
+    async function loadAccounts() {
+      const data = await (await fetch('/accounts')).json();
+      const sel = els('account');
+      sel.innerHTML = '';
+      for (const a of data.accounts) {
+        const o = document.createElement('option');
+        o.value = a.id; o.textContent = `${a.label} (${a.bank})`;
+        sel.appendChild(o);
+      }
+      if (!data.accounts.length) {
+        els('result').innerHTML = '<span class="warn">No accounts configured yet.</span>';
+        els('go').disabled = true;
+      }
+    }
+
+    els('go').onclick = async () => {
+      const file = els('file').files[0];
+      const result = els('result');
+      if (!file) { result.innerHTML = '<span class="warn">Choose a CSV file first.</span>'; return; }
+      const btn = els('go'); btn.disabled = true; result.textContent = 'Importing…';
+
+      const fd = new FormData();
+      fd.append('account_id', els('account').value);
+      fd.append('file', file);
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: fd });
+        const body = await res.json();
+        if (res.ok) {
+          result.innerHTML =
+            `<div style="color:var(--pos);font-weight:600;">Imported ✓</div>
+             <div class="muted" style="font-size:0.9rem;">
+               ${body.parsed} rows read · <b>${body.inserted}</b> new · ${body.duplicates} already present ·
+               ${body.classified} classified</div>
+             <div style="margin-top:0.4rem;"><a href="/">See it in the flow →</a></div>`;
+        } else {
+          result.innerHTML = `<span class="warn">${escapeHtml(body.detail || ('Upload failed: ' + res.status))}</span>`;
+        }
+      } catch (e) {
+        result.innerHTML = `<span class="warn">Upload failed: ${escapeHtml(String(e))}</span>`;
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    const escapeHtml = (s) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    loadAccounts();
+  </script>
+</main>
+</body>
+</html>

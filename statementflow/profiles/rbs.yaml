@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+#
+# Royal Bank of Scotland CSV export profile. Column layout only. NatWest Group;
+# same export layout as NatWest.
+#
+# Export header (7 columns):
+#   Date, Type, Description, Value, Balance, Account Name, Account Number
+#
+# Layout notes:
+#   * Rows are newest-first; `reverse: true` flips them to chronological order.
+#   * No transaction-id column, but a running Balance -> running_balance dedup
+#     and the §5a reconciliation check.
+#   * `Value` is a single signed column. The payee sits inside the comma-
+#     structured Description, so payee_strategy: delimited_description.
+
+name: rbs
+format: csv
+encoding: utf-8
+
+reverse: true
+dedup_strategy: running_balance
+payee_strategy: delimited_description
+
+date_column: "Date"
+date_format: "%d %b %Y"
+signed_amount_column: "Value"
+balance_column: "Balance"
+description_column: "Description"
+category_hint_column: "Type"

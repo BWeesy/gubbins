@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+#
+# Revolut CSV export profile. Column layout only.
+#
+# Export header (10 columns):
+#   Type, Product, Started Date, Completed Date, Description, Amount, Fee,
+#   Currency, State, Balance
+#
+# Layout notes:
+#   * Single signed Amount; running Balance present.
+#   * Completed Date carries a timestamp (YYYY-MM-DD HH:MM:SS).
+
+name: revolut
+format: csv
+encoding: utf-8
+
+dedup_strategy: running_balance
+payee_strategy: name_or_description
+
+date_column: "Completed Date"
+date_format: "%Y-%m-%d %H:%M:%S"
+signed_amount_column: "Amount"
+balance_column: "Balance"
+description_column: "Description"
+category_hint_column: "Type"

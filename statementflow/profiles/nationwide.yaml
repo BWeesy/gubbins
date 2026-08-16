@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+#
+# Nationwide Building Society CSV export profile. Column layout only.
+#
+# Export header (6 columns), after a short account-info preamble:
+#   Date, Transaction type, Description, Paid out, Paid in, Balance
+#
+# Layout notes:
+#   * A few account-info lines precede the header row -> skip_preamble.
+#   * Separate Paid out / Paid in columns (positive magnitudes).
+#   * Running Balance present; dates like "14 Jan 2026".
+
+name: nationwide
+format: csv
+encoding: utf-8
+skip_preamble: 4
+
+dedup_strategy: running_balance
+payee_strategy: name_or_description
+
+date_column: "Date"
+date_format: "%d %b %Y"
+debit_column: "Paid out"
+credit_column: "Paid in"
+balance_column: "Balance"
+description_column: "Description"
+category_hint_column: "Transaction type"

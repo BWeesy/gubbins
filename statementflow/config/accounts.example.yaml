@@ -1,0 +1,31 @@
+# StatementFlow accounts -- EXAMPLE (synthetic data only).
+#
+# Copy to accounts.yaml (gitignored) and edit with real values. These are the
+# in-ecosystem current/joint account NODES of the Sankey. Savings and Investment
+# are sink CATEGORIES, not accounts -- do not list them here, and do not upload
+# their statements as sources (brief §2.1: avoids double-counting).
+#
+# Ownership is derived from `owners` (brief §2.4):
+#   one owner  -> sole account, ownership = that user id
+#   two owners -> joint account, ownership = the literal value 'joint'
+# The uploader's identity never determines ownership.
+accounts:
+  - id: monzo-alice
+    label: Monzo
+    bank: monzo
+    owners: [alice]
+
+  - id: joint-current
+    label: NatWest Joint
+    bank: natwest
+    owners: [alice, bob]        # two owners -> ownership is 'joint'
+
+  - id: otherbank-bob
+    label: Other Bank
+    bank: otherbank
+    owners: [bob]
+    # When an export omits a running-balance column, anchor absolute balances
+    # here so running balances can be reconstructed by cumulative signed sum
+    # (brief §5a). Minor units (pence).
+    opening_balance: 250000     # £2,500.00
+    as_of: 2026-01-01

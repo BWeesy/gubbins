@@ -1,0 +1,24 @@
+# StatementFlow classification rules -- EXAMPLE (synthetic data only).
+#
+# Copy to rules.yaml (gitignored) and edit with real values. Rules map a
+# payee/description pattern to an outflow bucket: any category from
+# categories.yaml, or the static "other" (the default for an unmatched debit).
+# income/transfer/uncategorised are structural and are never rule targets.
+#
+# App-LEARNED rules (written by the review UI's "remember this payee") go to a
+# SEPARATE rules.learned.yaml so they can never clobber these hand-authored ones
+# (brief §8). Both files are private/gitignored.
+rules:
+  - match: "BROKER LTD"
+    bucket: investment
+  - match: "ENERGY CO"
+    bucket: energy
+  - match: "SAVINGS POT"
+    bucket: savings
+
+# Known own destinations: an account you own that shows up only as an unpaired
+# debit leg (its opposite leg was never uploaded). Matching debits are treated as
+# a TRANSFER, not an outflow (brief §2, §4 step 2). Sort codes here are fake.
+known_destinations:
+  - match: "TFR TO 12-34-56 12345678"
+    account_id: otherbank-bob

@@ -1,0 +1,288 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT
+  StatementFlow cash-flow Sankey. Plain HTML + ECharts (vendored locally, no CDN,
+  no build step). All views compose from GET /flows (parameterised) and
+  GET /transactions (drill-down). -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StatementFlow</title>
+  <link rel="stylesheet" href="/static/theme.css">
+</head>
+<body>
+<main>
+  <h1 style="margin-bottom: 0.25rem;">StatementFlow</h1>
+  <p class="muted" style="margin-top: 0;">Cash flow over a date range: income in, transfers between accounts, outflows out.</p>
+
+  <div style="display: flex; gap: 0.5rem; align-items: center; margin: 0.75rem 0; flex-wrap: wrap;">
+    <label>From <input type="date" id="start"></label>
+    <label>To <input type="date" id="end"></label>
+    <button id="prev" title="Shift the window back by its own length">‹</button>
+    <button id="next" title="Shift the window forward by its own length">›</button>
+    <label><input type="checkbox" id="compare"> vs previous period</label>
+  </div>
+  <div style="display: flex; gap: 0.75rem; align-items: center; margin: 0 0 0.75rem; flex-wrap: wrap; font-size: 0.9rem;">
+    <label>Colour
+      <select id="colour">
+        <option value="category">by category</option>
+        <option value="owner">by owner</option>
+        <option value="account">by account</option>
+        <option value="review">by review status</option>
+      </select>
+    </label>
+    <label>Layout
+      <select id="layout">
+        <option value="combined">combined</option>
+        <option value="lanes">per-owner lanes</option>
+      </select>
+    </label>
+    <label>Transfers
+      <select id="transfers">
+        <option value="include">include</option>
+        <option value="exclude">exclude</option>
+        <option value="only">only</option>
+      </select>
+    </label>
+    <span id="totals" class="muted" style="margin-left: 0.5rem;"></span>
+  </div>
+
+  <div id="tiles" style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem;"></div>
+  <div id="legend" class="muted" style="display: flex; gap: 1rem; flex-wrap: wrap; margin: 0 0 0.4rem; font-size: 0.85rem;"></div>
+  <div id="charts"></div>
+  <div id="drill" style="margin-top: 0.75rem;"></div>
+  <p id="warnings" class="warn" style="font-size: 0.9rem;"></p>
+  <p><a href="/static/upload.html">Upload statement</a> · <a href="/static/review.html">Review queue →</a></p>
+
+  <script src="/static/vendor/echarts.min.js"></script>
+  <script>
+    // --- colour helpers (neon on near-black) ------------------------------
+    const COLORS = { income: '#24ff9e', account: '#00e5ff', other: '#4a6784' };
+    const PALETTE = ['#00e5ff', '#ff36c9', '#7cff5a', '#ffb020', '#b388ff',
+                     '#ff5c7a', '#39d0ff', '#c6ff33', '#ff8f3d', '#22ffd0'];
+    const NEUTRAL = '#5a7186', REVIEW = '#ff2e63', DIM = '#33465a';
+    const OWNER_FIXED = { joint: '#b388ff' };
+    const TEXT = '#cfe3f6', POS = '#24ff9e', NEG = '#ff2e63';
+    const _cat = {}, _owner = {}, _acct = {};
+    const pick = (map, key) => (key in map ? map[key]
+      : (map[key] = PALETTE[Object.keys(map).length % PALETTE.length]));
+    const categoryColor = (n) => (n.type !== 'sink' || COLORS[n.id])
+      ? (COLORS[n.type] || COLORS[n.id] || '#999') : pick(_cat, n.id);
+    const ownerColor = (o) => o == null ? NEUTRAL : (OWNER_FIXED[o] || pick(_owner, o));
+    const accountColor = (id) => pick(_acct, id);
+
+    // --- money / dates ----------------------------------------------------
+    const fmt = (pence) => (pence < 0 ? '-' : '') + '£' +
+      (Math.abs(pence) / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const shiftISO = (iso, days) => {
+      const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().slice(0, 10);
+    };
+    const spanDays = (a, b) =>
+      Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000) + 1;
+    const ownerLabel = (o) => o === 'joint' ? 'Joint' : o === 'unknown' ? 'Unknown' : o;
+
+    const els = (id) => document.getElementById(id);
+    const startEl = els('start'), endEl = els('end'), colourEl = els('colour'),
+          layoutEl = els('layout'), transfersEl = els('transfers'), compareEl = els('compare');
+    let last = null, charts = [];
+
+    // --- data -------------------------------------------------------------
+    async function getFlows(owner) {
+      const p = new URLSearchParams({ start: startEl.value, end: endEl.value, transfers: transfersEl.value });
+      if (colourEl.value === 'review') p.set('split_unreviewed', 'true');
+      if (owner) p.set('owner', owner);
+      return (await fetch('/flows?' + p)).json();
+    }
+
+    async function boot() {
+      const range = await (await fetch('/range')).json();
+      if (!range.min) { els('totals').textContent = 'No data yet — upload a statement.'; return; }
+      for (const el of [startEl, endEl]) { el.min = range.min; el.max = range.max; }
+      const start30 = new Date(range.max + 'T00:00:00Z');
+      start30.setUTCDate(start30.getUTCDate() - 29);
+      const s = start30.toISOString().slice(0, 10);
+      startEl.value = s < range.min ? range.min : s;
+      endEl.value = range.max;
+      refresh();
+    }
+
+    startEl.onchange = endEl.onchange = compareEl.onchange = transfersEl.onchange = refresh;
+    colourEl.onchange = layoutEl.onchange = () => refresh();  // may change split_unreviewed / lane fetches
+    els('prev').onclick = () => shift(-1);
+    els('next').onclick = () => shift(1);
+    function shift(dir) {
+      const span = spanDays(startEl.value, endEl.value);
+      startEl.value = shiftISO(startEl.value, dir * span);
+      endEl.value = shiftISO(endEl.value, dir * span);
+      refresh();
+    }
+
+    async function refresh() {
+      const start = startEl.value, end = endEl.value;
+      if (!start || !end || start > end) return;
+      last = await getFlows(null);
+
+      let prev = null;
+      if (compareEl.checked) {
+        const span = spanDays(start, end);
+        const p = new URLSearchParams({
+          start: shiftISO(start, -span), end: shiftISO(start, -1), transfers: transfersEl.value });
+        prev = await (await fetch('/flows?' + p)).json();
+      }
+
+      const t = last.totals;
+      els('totals').textContent = `Income ${t.income} · Out ${t.sinks}` +
+        (t.invariant_ok ? '' : ' · ⚠ transfers cross the range boundary');
+      renderTiles(last.summary, prev && prev.summary);
+      renderWarnings(last);
+      await draw();
+    }
+
+    // --- summary tiles ----------------------------------------------------
+    function renderTiles(summary, prevSummary) {
+      const owners = Object.keys(summary.by_owner).sort();
+      els('tiles').innerHTML = owners.map(o => {
+        const s = summary.by_owner[o];
+        const p = prevSummary && prevSummary.by_owner[o];
+        const c = ownerColor(o);
+        const delta = p ? deltaSpan(s.net - p.net) : '';
+        return `<div class="tile">
+          <div class="name"><span class="swatch" style="background:${c};box-shadow:0 0 7px ${c};"></span>${ownerLabel(o)}</div>
+          <div class="net" style="color:${s.net >= 0 ? POS : NEG};">${fmt(s.net)} ${delta}</div>
+          <div class="sub">in ${fmt(s.income)} · out ${fmt(s.outflow)}</div>
+        </div>`;
+      }).join('');
+    }
+    const deltaSpan = (d) => {
+      const up = d >= 0;
+      return `<span style="font-size:0.8rem;color:${up ? POS : NEG};">${up ? '▲' : '▼'} ${fmt(Math.abs(d))}</span>`;
+    };
+
+    function renderWarnings(data) {
+      const warns = data.nodes.filter(n => n.reconciliation && !n.reconciliation.ok)
+        .map(n => `${n.label}: flow ${n.reconciliation.flow_sum} vs balance ${n.reconciliation.balance_diff}`);
+      els('warnings').textContent = warns.length ? 'Reconciliation mismatch — ' + warns.join('; ') : '';
+    }
+
+    // --- charts -----------------------------------------------------------
+    function disposeCharts() { charts.forEach(c => c.dispose()); charts = []; els('charts').innerHTML = ''; }
+
+    async function draw() {
+      disposeCharts();
+      const mode = colourEl.value;
+      if (layoutEl.value === 'lanes') {
+        const owners = Object.keys(last.summary.by_owner).sort();
+        for (const owner of owners) addChart(ownerLabel(owner), await getFlows(owner), mode, owner);
+      } else {
+        addChart(null, last, mode, null);
+      }
+      drawLegend(mode, last);
+    }
+
+    function addChart(title, data, mode, ownerScope) {
+      const wrap = document.createElement('div');
+      if (title) {
+        const h = document.createElement('div');
+        h.textContent = title;
+        h.style.cssText = 'font-weight:600;margin:0.3rem 0 0.1rem;';
+        wrap.appendChild(h);
+      }
+      const div = document.createElement('div');
+      div.className = 'chart';
+      div.style.cssText = `width:100%;height:${title ? 260 : 560}px;`;
+      wrap.appendChild(div);
+      els('charts').appendChild(wrap);
+
+      const chart = echarts.init(div);
+      const { option, drill } = sankeyOption(data, mode);
+      chart.setOption(option, true);
+      chart.on('click', (p) => { if (p.dataType === 'node' && drill.has(p.name)) drilldown(p.name, ownerScope); });
+      charts.push(chart);
+    }
+
+    function sankeyOption(data, mode) {
+      const display = {}, drill = new Set();
+      const accountOwner = {};
+      for (const n of data.nodes) if (n.type === 'account') accountOwner[n.id] = n.owner;
+      for (const n of data.nodes) {
+        let label = n.label;
+        if (n.type === 'account') label = `${n.label}  ${n.net_delta}`;
+        if (n.reconciliation && !n.reconciliation.ok) label += '  ⚠';
+        display[n.id] = label;
+        if (n.type === 'income' || n.type === 'sink') drill.add(n.id);  // clickable
+      }
+      const nodeColor = (n) =>
+        mode === 'owner'   ? (n.type === 'account' ? ownerColor(n.owner) : NEUTRAL) :
+        mode === 'account' ? (n.type === 'account' ? accountColor(n.id) : NEUTRAL) :
+        mode === 'review'  ? (n.id === 'uncategorised' ? REVIEW : DIM) :
+                             categoryColor(n);
+      const linkColor = (e) =>
+        mode === 'owner'   ? { color: ownerColor(accountOwner[e.account]), opacity: 0.5 } :
+        mode === 'account' ? { color: accountColor(e.account), opacity: 0.5 } :
+        mode === 'review'  ? (e.source === 'uncategorised' || e.target === 'uncategorised'
+                                ? { color: REVIEW, opacity: 0.7 } : { color: DIM, opacity: 0.25 }) :
+                             { color: 'gradient', opacity: 0.4 };
+      const option = {
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'item', triggerOn: 'mousemove',
+          backgroundColor: 'rgba(8,14,22,0.95)', borderColor: '#00e5ff', borderWidth: 1,
+          textStyle: { color: TEXT },
+          formatter: (p) => p.dataType === 'edge'
+            ? `${display[p.data.source]} → ${display[p.data.target]}<br>£${p.data.value.toFixed(2)}`
+            : display[p.name] + (drill.has(p.name) ? '<br><i style="color:#00e5ff">click to drill down</i>' : '') },
+        series: [{
+          type: 'sankey', emphasis: { focus: 'adjacency' }, nodeAlign: 'justify', draggable: false,
+          data: data.nodes.map(n => {
+            const c = nodeColor(n);
+            return { name: n.id, itemStyle: { color: c, borderColor: c, shadowColor: c, shadowBlur: 8 } };
+          }),
+          links: data.edges.map(e => ({ source: e.source, target: e.target, value: e.value, lineStyle: linkColor(e) })),
+          label: { formatter: (p) => display[p.name], fontSize: 11, color: TEXT,
+                   textShadowColor: '#000', textShadowBlur: 3 },
+          lineStyle: { opacity: 0.45 },
+        }],
+      };
+      return { option, drill };
+    }
+
+    function drawLegend(mode, data) {
+      let entries = [];
+      if (mode === 'owner') {
+        const owners = [...new Set(data.nodes.filter(n => n.type === 'account').map(n => n.owner).filter(Boolean))].sort();
+        entries = owners.map(o => [ownerColor(o), ownerLabel(o)]);
+      } else if (mode === 'account') {
+        entries = data.nodes.filter(n => n.type === 'account').map(n => [accountColor(n.id), n.label]);
+      } else if (mode === 'review') {
+        entries = [[REVIEW, 'Needs review'], [DIM, 'Classified']];
+      }
+      els('legend').innerHTML = entries.map(([c, label]) =>
+        `<span><span class="swatch" style="background:${c};box-shadow:0 0 7px ${c};"></span>${label}</span>`
+      ).join('');
+    }
+
+    // --- drill-down -------------------------------------------------------
+    async function drilldown(category, owner) {
+      const p = new URLSearchParams({ start: startEl.value, end: endEl.value, category });
+      if (owner) p.set('owner', owner);
+      const data = await (await fetch('/transactions?' + p)).json();
+      const rows = data.items.map(i =>
+        `<tr><td>${i.date}</td><td>${i.account}</td><td>${escapeHtml(i.description)}</td>` +
+        `<td class="mono" style="text-align:right;">${i.amount}</td></tr>`).join('');
+      els('drill').innerHTML =
+        `<div class="panel">
+           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
+             <strong style="color:var(--heading);">${category}${owner ? ' · ' + ownerLabel(owner) : ''} — ${data.items.length} transaction(s)</strong>
+             <button onclick="document.getElementById('drill').innerHTML=''">close ✕</button></div>
+           <table style="font-size:0.9rem;">${rows}</table>
+         </div>`;
+      els('drill').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    const escapeHtml = (s) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    window.addEventListener('resize', () => charts.forEach(c => c.resize()));
+    boot();
+  </script>
+</main>
+</body>
+</html>

@@ -1,0 +1,7 @@
+Transaction ID,Date,Time,Type,Name,Emoji,Category,Amount,Currency,Local amount,Local currency,Notes and #tags,Address,Receipt,Description,Category split,Money Out,Money In
+tx_SYNTH000001,01/05/2026,09:00:00,Card payment,Coffee Bar,,Eating out,-3.50,GBP,-3.50,GBP,,,,COFFEE BAR             LONDON        GBR,,-3.50,
+tx_SYNTH000002,01/05/2026,09:00:30,Card payment,Coffee Bar,,Eating out,-3.50,GBP,-3.50,GBP,,,,COFFEE BAR             LONDON        GBR,,-3.50,
+tx_SYNTH000003,02/05/2026,12:00:00,Faster payment,Employer Ltd,,Income,1500.00,GBP,1500.00,GBP,Salary,,,ACME SALARY,,,1500.00
+tx_SYNTH000004,03/05/2026,08:00:00,Card payment,Foreign Cafe,,Groceries,-4.30,GBP,-5.00,EUR,,,,FOREIGN CAFE           PARIS         FRA,,-4.30,
+tx_SYNTH000005,03/05/2026,18:00:00,Card payment,Corner Shop,,Groceries,2.00,GBP,2.00,GBP,refund,,,CORNER SHOP REFUND,,,2.00
+tx_SYNTH000006,04/05/2026,10:00:00,Monzo-to-Monzo,Joint Account,,Transfers,-200.00,GBP,-200.00,GBP,,,,,,-200.00,

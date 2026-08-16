@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT
+#
+# StatementFlow is a uv-managed "virtual" project (no build-system): uv installs
+# the dependency set into .venv but does not build/install the `app` package, so
+# there is nothing to package. Run everything through uv:
+#
+#   uv run --locked python -m uvicorn app.main:app --host 127.0.0.1 --port 8770
+#   uv run --locked pytest
+#
+# Dependencies are pinned in uv.lock; --locked fails if pyproject and the lock
+# have drifted (the "did you forget to re-lock?" gate). Re-lock with `uv lock`.
+
+[project]
+name = "statementflow"
+version = "0.0.0"
+description = "Self-hosted monthly cash-flow Sankey for a household, served over Tailscale."
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "pyyaml>=6.0",
+    # FastAPI needs this to parse multipart/form-data statement uploads.
+    "python-multipart>=0.0.18",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    # Backs FastAPI's TestClient so the API is exercised in-process, no server.
+    "httpx>=0.28",
+]
+
+[tool.pytest.ini_options]
+# The importable package is `app`, living under the project root rather than in
+# a src/ layout, so put the project root on the path for the test collector.
+pythonpath = ["."]
+testpaths = ["tests"]

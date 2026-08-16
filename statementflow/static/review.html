@@ -1,0 +1,110 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT
+  StatementFlow review queue: lists transactions the engine could not confidently
+  bucket and lets you assign one, optionally remembering the payee. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StatementFlow — Review</title>
+  <link rel="stylesheet" href="/static/theme.css">
+</head>
+<body>
+<main class="review">
+  <h1>Review queue</h1>
+  <p id="status" class="muted">Loading…</p>
+  <div class="scroll">
+  <table id="queue" hidden>
+    <thead>
+      <tr>
+        <th>Date</th><th>Account</th><th>Description</th><th>Hint</th>
+        <th style="text-align: right;">Amount</th><th>Bucket</th><th></th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  </div>
+  <p style="margin-top: 1rem;"><a href="/">← Back to the flow</a></p>
+
+  <script>
+    let INCOME_BUCKETS = [], OUTFLOW_BUCKETS = [];
+
+    async function load() {
+      const res = await fetch('/review');
+      const data = await res.json();
+      INCOME_BUCKETS = data.income_buckets;
+      OUTFLOW_BUCKETS = data.outflow_buckets;
+      const tbody = document.querySelector('#queue tbody');
+      tbody.innerHTML = '';
+      for (const item of data.items) tbody.appendChild(rowFor(item));
+      document.querySelector('#queue').hidden = data.items.length === 0;
+      document.querySelector('#status').textContent =
+        data.items.length ? `${data.items.length} to review` : 'Nothing to review 🎉';
+    }
+
+    function rowFor(item) {
+      const tr = document.createElement('tr');
+      const select = document.createElement('select');
+      // Income rows get income buckets; outflow rows get outflow buckets.
+      const buckets = item.kind === 'income' ? INCOME_BUCKETS : OUTFLOW_BUCKETS;
+      for (const b of buckets) {
+        const opt = document.createElement('option');
+        opt.value = b; opt.textContent = b;
+        select.appendChild(opt);
+      }
+      const remember = document.createElement('input');
+      remember.type = 'checkbox';
+      // Editable match: pre-filled with the payee token, so "remember" learns a
+      // rule that generalises across locations rather than the exact row.
+      const matchInput = document.createElement('input');
+      matchInput.type = 'text';
+      matchInput.value = item.payee || '';
+      matchInput.size = 18;
+      matchInput.title = 'Learn this text → bucket (substring match)';
+      const btn = document.createElement('button');
+      btn.textContent = 'Save';
+      btn.onclick = () => save(item.id, select.value, remember.checked, matchInput.value, tr);
+
+      const cells = [
+        item.date, item.account, item.description, item.category_hint || '',
+      ].map(text);
+      const amount = text(item.amount);
+      amount.style.textAlign = 'right';
+      const bucketCell = document.createElement('td');
+      bucketCell.append(select, ' remember ', remember, ' as ', matchInput);
+      const actionCell = document.createElement('td');
+      actionCell.appendChild(btn);
+      for (const c of cells) tr.appendChild(c);
+      tr.append(amount, bucketCell, actionCell);
+      return tr;
+    }
+
+    function text(value) {
+      const td = document.createElement('td');
+      td.style.padding = '0.35rem 0.5rem';
+      td.textContent = value;
+      return td;
+    }
+
+    async function save(id, bucket, remember, match, tr) {
+      const res = await fetch(`/review/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bucket, remember, match: remember ? match : null }),
+      });
+      if (res.ok) { tr.remove(); refreshCount(); }
+      else { alert('Save failed: ' + res.status); }
+    }
+
+    function refreshCount() {
+      const left = document.querySelectorAll('#queue tbody tr').length;
+      document.querySelector('#status').textContent =
+        left ? `${left} to review` : 'Nothing to review 🎉';
+      if (!left) document.querySelector('#queue').hidden = true;
+    }
+
+    load();
+  </script>
+</main>
+</body>
+</html>
