@@ -88,6 +88,12 @@ A flake at the repo root exposes `nixosModules.statementflow` and a
 `statementflow` package (a nixpkgs Python running the app — no uv at runtime),
 plus a VM test in `checks`.
 
+**Enable Serve for your tailnet first**, in the Tailscale admin console — it is
+off by default, and until it is on the serve unit fails and retries every
+minute (the enable link appears in
+`journalctl -u statementflow-tailscale-serve`). Enable **MagicDNS** and **HTTPS
+certificates** there too; serve needs a cert for the `.ts.net` name.
+
 Add the module to your host and enable it:
 
 ```nix
@@ -99,6 +105,17 @@ Add the module to your host and enable it:
     # port defaults to 8770 (loopback only); tailscaleServe defaults to true.
   };
 }
+```
+
+A classic `configuration.nix` consumes the same module via a pinned tarball:
+
+```nix
+imports = [
+  (import (builtins.fetchTarball {
+    url = "https://github.com/BWeesy/gubbins/archive/<commit>.tar.gz";
+    sha256 = "<hash from nix-prefetch-url --unpack>";
+  } + "/statementflow/nix/module.nix"))
+];
 ```
 
 Then supply the **private** config (never committed, never in the Nix store —

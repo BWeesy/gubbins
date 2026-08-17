@@ -58,6 +58,10 @@ in
         that header ONLY because serve is the sole path to the loopback port.
         Reachable at https://<magicdns-name>/ from any device on your tailnet.
         Requires services.tailscale.enable.
+
+        Serve must also be enabled once for the tailnet itself, in the admin
+        console. Until it is, the unit fails and retries every minute, and
+        `journalctl -u statementflow-tailscale-serve` carries the enable link.
       '';
     };
 
@@ -168,6 +172,17 @@ in
         ExecStart =
           "${lib.getExe cfg.tailscalePackage} serve --bg http://127.0.0.1:${toString cfg.port}";
         ExecStop = "${lib.getExe cfg.tailscalePackage} serve reset";
+
+        # Serve is a tailnet-wide feature that has to be enabled once, and until
+        # it is, `tailscale serve` sits waiting for someone to click the enable
+        # link it prints. A oneshot blocks its target while ExecStart runs, so
+        # without a bound that wait wedges multi-user.target -- hanging
+        # nixos-rebuild, and every subsequent boot. Fail fast instead, and retry
+        # quietly so the unit heals itself once Serve is switched on rather than
+        # needing a manual start.
+        TimeoutStartSec = 60;
+        Restart = "on-failure";
+        RestartSec = 60;
       };
     };
   };
