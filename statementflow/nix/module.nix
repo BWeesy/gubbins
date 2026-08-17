@@ -26,7 +26,24 @@ in
       description = ''
         Loopback port the app binds. It is only ever bound to 127.0.0.1 -- the
         trust model is that `tailscale serve` is the sole ingress, so the port
-        must never be exposed directly (see `tailscaleServe`).
+        must never be exposed directly (see `tailscaleServe`). This is internal;
+        to change the port the app is *reached* on, set `servePort`.
+      '';
+    };
+
+    servePort = lib.mkOption {
+      type = lib.types.port;
+      default = 443;
+      example = 8443;
+      description = ''
+        Port `tailscale serve` publishes on, i.e. the one in the URL:
+        https://<magicdns-name>:<servePort>/. The default 443 gives the bare
+        https://<magicdns-name>/ but claims the whole node for this app, so pick
+        a distinct port here for each app you serve from the same machine.
+
+        Serving several apps on 443 under different paths (`tailscale serve
+        --set-path`) is NOT usable here: the frontend fetches absolute paths
+        (/flows, /static/...), so it would break under a path prefix. Use a port.
       '';
     };
 
@@ -167,11 +184,20 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        # Serves https://<magicdns>/ -> the loopback app. `reset` on stop clears
-        # this node's serve config (fine when statementflow is the only serve).
+        # Serves https://<magicdns>:<servePort>/ -> the loopback app. --https is
+        # passed explicitly so the published port is visible in the unit rather
+        # than an implicit default.
         ExecStart =
-          "${lib.getExe cfg.tailscalePackage} serve --bg http://127.0.0.1:${toString cfg.port}";
-        ExecStop = "${lib.getExe cfg.tailscalePackage} serve reset";
+          "${lib.getExe cfg.tailscalePackage} serve --bg"
+          + " --https ${toString cfg.servePort}"
+          + " http://127.0.0.1:${toString cfg.port}";
+        # Deliberately no ExecStop. The only blunt instrument available is
+        # `tailscale serve reset`, which clears EVERY serve mapping on the node
+        # -- so stopping this unit would take down any other app served from the
+        # same machine. Leaving our mapping in place on stop is the lesser evil:
+        # it points at a closed port until the unit runs again, and ExecStart is
+        # idempotent so a restart simply re-asserts it. Drop the mapping by hand
+        # with `tailscale serve reset` if you are retiring the app outright.
 
         # Serve is a tailnet-wide feature that has to be enabled once, and until
         # it is, `tailscale serve` sits waiting for someone to click the enable

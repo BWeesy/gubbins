@@ -103,9 +103,29 @@ Add the module to your host and enable it:
   services.statementflow = {
     enable = true;
     # port defaults to 8770 (loopback only); tailscaleServe defaults to true.
+    # servePort = 8443;   # share the node with other served apps (see below)
   };
 }
 ```
+
+### Sharing a machine with other served apps
+
+`servePort` is the port in the URL. It defaults to `443`, which gives the bare
+`https://<host>.<tailnet>.ts.net/` but claims the node for this app alone. Give
+each app its own port to coexist:
+
+```nix
+services.statementflow.servePort = 8443;   # https://<host>.<tailnet>.ts.net:8443/
+```
+
+Serving several apps on 443 under different paths (`tailscale serve --set-path`)
+does **not** work here — the frontend fetches absolute paths (`/flows`,
+`/static/...`), which a path prefix would break. Use a port.
+
+Note the unit has no `ExecStop`: the only removal command,
+`tailscale serve reset`, clears *every* mapping on the node, which would take
+down your other apps. The mapping is instead left in place and re-asserted on
+start.
 
 A classic `configuration.nix` consumes the same module via a pinned tarball:
 
