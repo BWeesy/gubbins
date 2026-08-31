@@ -90,7 +90,9 @@
   .cvNote{font-size:10px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px solid var(--edge);line-height:1.4}
   #readoutDetail{margin-top:10px;padding-top:8px;border-top:1px solid var(--edge)}
   @media (max-width:560px){
-    #controls{width:216px} #hint{display:none}
+    /* 196px is as narrow as this content goes without reflowing: at 192 the
+       longer overlay labels ("Coverage & gaps at goal") wrap to two lines. */
+    #controls{width:196px} #hint{display:none}
     #readout{width:154px} #readoutDetail{display:none} .cvPct{font-size:34px}
   }
 </style>
