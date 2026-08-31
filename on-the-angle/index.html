@@ -669,11 +669,30 @@ function faceCoverage(B,K,poly2d){
 let bxBall=0, bzBall=0;                                 // set each update for projGoal
 /* Hatch across the whole goal opening; the covered polygon is drawn over it,
    so only the open net keeps its stripes. */
-function hatchPlane(z){
-  const t=hatchTex.clone(); t.needsUpdate=true; t.repeat.set(GOAL_W*1.6, GOAL_H*1.6);
-  const m=new THREE.Mesh(new THREE.PlaneGeometry(GOAL_W,GOAL_H),
-    new THREE.MeshBasicMaterial({map:t, transparent:true, opacity:0.5, side:THREE.DoubleSide, depthWrite:false}));
-  m.position.set(0,GOAL_H/2,z); return m;
+/* The open net, as the goal mouth with the covered region cut out of it as a
+   hole, carrying both its colour and the hatch.
+
+   Hatching the whole mouth and painting the covered region over it does not
+   work: the covered region is semi-transparent, so the stripes show straight
+   through and both halves end up hatched -- which is precisely the reading the
+   hatch exists to avoid. Cutting the hole means the stripes cannot land on
+   covered net whatever its opacity.
+
+   ShapeGeometry's UVs come from the shape's own x/y, so texture repeat is in
+   metres and the stripe pitch stays fixed as the covered region changes. */
+function openFaceMesh(coveredPoly,z,color,op){
+  const sh=new THREE.Shape();
+  sh.moveTo(-HALF,0); sh.lineTo(HALF,0); sh.lineTo(HALF,GOAL_H); sh.lineTo(-HALF,GOAL_H); sh.closePath();
+  if(coveredPoly && coveredPoly.length>=3){
+    const h=new THREE.Path();
+    h.moveTo(coveredPoly[0][0],coveredPoly[0][1]);
+    for(let i=1;i<coveredPoly.length;i++) h.lineTo(coveredPoly[i][0],coveredPoly[i][1]);
+    h.closePath(); sh.holes.push(h);
+  }
+  const g=new THREE.ShapeGeometry(sh); g.translate(0,0,z);
+  const t=hatchTex.clone(); t.needsUpdate=true; t.repeat.set(2.6,2.6);
+  return new THREE.Mesh(g,new THREE.MeshBasicMaterial({
+    color, map:t, transparent:true, opacity:op, side:THREE.DoubleSide, depthWrite:false}));
 }
 function faceMesh(pts,z,color,op){                      // filled polygon on the goal plane (handles non-convex)
   if(pts.length<3) return null;
@@ -889,11 +908,9 @@ function update(){
   }
   if(el('oCover').checked){
     if(useFace){
-      // Shade the goal opening: open face, then hatching over it, then the
-      // covered region on top -- so the hatch survives only where the net is
-      // open, and open-versus-covered reads without relying on colour.
-      viz.add(faceMesh([[-HALF,0],[HALF,0],[HALF,GOAL_H],[-HALF,GOAL_H]], 0.0, PAL().open, 0.22));
-      viz.add(hatchPlane(0.025));
+      // Open net carries the colour and the hatch, with the covered region cut
+      // out of it, so the two never share a pattern. Covered goes on top, flat.
+      viz.add(openFaceMesh(face&&face.poly.length>=3?face.poly:null, 0.0, PAL().open, 0.30));
       if(face && face.poly.length>=3) viz.add(faceMesh(face.poly, 0.05, PAL().covered, 0.5));
       viz.add(polyline([new THREE.Vector3(-HALF,0,0),new THREE.Vector3(HALF,0,0),
         new THREE.Vector3(HALF,GOAL_H,0),new THREE.Vector3(-HALF,GOAL_H,0),new THREE.Vector3(-HALF,0,0)],0xdfeef2));
