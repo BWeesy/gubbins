@@ -1,0 +1,52 @@
+name: on-the-angle bug report
+description: Report a problem with On The Angle (the field-hockey keeper positioning page)
+labels: ["bug", "on-the-angle"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The single most useful thing you can give us is
+        the **share link**, because it carries the exact scene — ball, keeper,
+        camera angle and all the settings — so we can reproduce what you were
+        looking at rather than guess.
+
+        If you followed the "Report a problem" link from the page itself, it is
+        already filled in below.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What went wrong?
+      description: What did you expect to see, and what did you see instead?
+      placeholder: The stats panel over the goal was stretched and the text was unreadable.
+    validations:
+      required: true
+
+  - type: input
+    id: share_link
+    attributes:
+      label: Share link
+      description: The "Copy link" button in the panel, or the address bar.
+      placeholder: https://bweesy.github.io/gubbins/on-the-angle/#bx=4.5&...
+    validations:
+      required: false
+
+  - type: input
+    id: device
+    attributes:
+      label: Device and browser
+      description: >-
+        Phone or laptop, and which browser. If the page filled this in for you,
+        it is your browser's user-agent string — trim anything you would rather
+        not post publicly.
+      placeholder: iPhone 13, Safari
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Drag an image in here if it is a visual problem. Usually worth more than the description.
+    validations:
+      required: false
