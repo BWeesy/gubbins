@@ -72,6 +72,8 @@
   button:hover{background:rgba(255,255,255,.11)}
   button.on{background:var(--cyanDim);border-color:var(--cyan);color:#eafffb}
   button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  #bugLink{display:block;margin-top:9px;font-size:11.5px;color:var(--muted);text-align:center;text-decoration:none;line-height:1.4}
+  #bugLink:hover{color:var(--cyan)}
   #supportLink{display:block;margin-top:9px;font-size:11.5px;color:var(--muted);text-align:center;text-decoration:none;line-height:1.4}
   #supportLink:hover{color:var(--cyan)}
   .chk{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:12px;cursor:pointer;user-select:none}
@@ -225,6 +227,8 @@
     <label class="chk"><input type="checkbox" id="oPyr"> 3D cone</label>
     <label class="chk"><input type="checkbox" id="oGrid" checked> 1 m grid</label>
     <label class="chk"><input type="checkbox" id="oBillboard" checked> Stats billboard</label>
+    <button id="palBtn" style="width:100%;margin-top:8px" aria-pressed="false">Colours: classic</button>
+    <p class="sub" style="margin:6px 0 0">Open net is always hatched as well as coloured. Safe swaps red/green for orange/blue.</p>
   </div>
 
   <div class="group">
@@ -239,6 +243,7 @@
   <div class="group">
     <div class="glabel">Share</div>
     <button id="copyBtn" style="width:100%">Copy link</button>
+    <a href="https://github.com/BWeesy/gubbins/issues/new?template=on_the_angle_bug.yml" target="_blank" rel="noopener" id="bugLink">Something look wrong? Report it</a>
     <a href="https://ko-fi.com/bweesy" target="_blank" rel="noopener" id="supportLink">Free for keepers everywhere — if it helped, ☕ buy me a coffee</a>
   </div>
   </div>
@@ -261,7 +266,7 @@
 
 <div id="corner">
   <div id="hint" class="panel">
-    Green = net the keeper covers. Red = open net. Advance the keeper along the bisector to watch the cone close.
+    Solid = net the keeper covers. Hatched = open net. Advance the keeper along the bisector to watch the cone close.
   </div>
 
   <div id="views" class="panel">
@@ -276,10 +281,77 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 "use strict";
+/* three.js comes from a CDN, so a blocked network (club or school wifi often
+   blocks CDNs) leaves an unexplained black screen. Say what happened instead.
+   Not vendored: it is ~600KB against a page that is otherwise 60KB. */
+if(typeof THREE==='undefined'){
+  document.getElementById('stage').innerHTML=
+    '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px">'+
+    '<div style="max-width:420px;background:rgba(16,26,40,.9);border:1px solid rgba(120,150,180,.22);'+
+    'border-radius:12px;padding:18px 20px;line-height:1.5">'+
+    '<h1 style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin:0 0 8px;color:#37d6c6">On The Angle</h1>'+
+    '<p style="margin:0 0 10px">The 3D library this page needs did not load, so there is nothing to draw.</p>'+
+    '<p style="margin:0 0 10px;color:#8ea6b6;font-size:12.5px">It is fetched from cdnjs.cloudflare.com. '+
+    'A network that blocks CDNs (club or school wifi often does), an ad blocker, or being offline will all do this.</p>'+
+    '<p style="margin:0;font-size:12.5px"><a href="" onclick="location.reload();return false" style="color:#37d6c6">Try again</a>'+
+    ' &nbsp;·&nbsp; <a href="https://github.com/BWeesy/gubbins/issues/new?template=on_the_angle_bug.yml" '+
+    'style="color:#37d6c6">report it</a></p></div></div>';
+  document.querySelectorAll('.panel,#corner').forEach(e=>e.style.display='none');
+  throw new Error('three.js failed to load');
+}
 /* ------------------------------------------------------------------ */
 /*  Field-hockey dimensions (metres)                                   */
 /* ------------------------------------------------------------------ */
 const GOAL_W = 3.66, GOAL_H = 2.14, POST = 0.051, GOAL_DEPTH = 1.20, BACKBOARD_H = 0.46;
+
+/* ------------------------------------------------------------------ */
+/*  Palettes                                                           */
+/*                                                                     */
+/*  Covered-versus-open is the whole point of the picture, and red      */
+/*  against green is the one pair a large minority cannot separate.     */
+/*  Measured on the rendered pixels, the billboard's two bars fall to   */
+/*  dE 15.7 under deuteranopia (the commonest form) against 101 for     */
+/*  normal vision -- close to a single muddy tone.                      */
+/*                                                                     */
+/*  Two independent answers, because either alone can fail: open net is */
+/*  hatched as well as coloured, so it reads without any colour at all; */
+/*  and the safe palette swaps the pair for blue against orange, which  */
+/*  survives all three dichromacies.                                   */
+/* ------------------------------------------------------------------ */
+const PALETTES={
+  classic:{ label:'Classic',
+    covered:0x5be08a, open:0xff6b6b, coveredCss:'#5be08a', openCss:'#ff6b6b',
+    coveredFill:'#5be08a', openFill:'rgba(255,107,107,0.85)',
+    heat:[[0.86,0.25,0.25],[0.95,0.80,0.30],[0.36,0.85,0.45]] },
+  safe:{ label:'Colour-blind safe',
+    covered:0x4da3ff, open:0xffa62b, coveredCss:'#4da3ff', openCss:'#ffa62b',
+    coveredFill:'#4da3ff', openFill:'rgba(255,166,43,0.90)',
+    // sequential ramp for the heatmap: dark blue -> teal -> yellow, which
+    // stays monotonic in lightness under every dichromacy.
+    heat:[[0.19,0.13,0.42],[0.13,0.57,0.55],[0.99,0.91,0.22]] }
+};
+let palette='classic';
+const PAL=()=>PALETTES[palette];
+
+/* Diagonal hatch, drawn once and tiled. Carries the covered/open distinction
+   on its own when colour cannot. */
+const hatchTex=(()=>{
+  const c=document.createElement('canvas'); c.width=c.height=16;
+  const x=c.getContext('2d');
+  x.strokeStyle='rgba(255,255,255,0.85)'; x.lineWidth=2.5; x.lineCap='square';
+  for(let o=-16;o<=16;o+=8){ x.beginPath(); x.moveTo(o,16); x.lineTo(o+16,0); x.stroke(); }
+  const t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping; t.magFilter=THREE.LinearFilter;
+  return t;
+})();
+/* Same hatch as a 2D fill, for the billboard's goal-mouth schematic. */
+function hatchPattern(ctx,alpha){
+  const c=document.createElement('canvas'); c.width=c.height=14;
+  const x=c.getContext('2d');
+  x.strokeStyle='rgba(255,255,255,'+alpha+')'; x.lineWidth=2.5; x.lineCap='square';
+  for(let o=-14;o<=14;o+=7){ x.beginPath(); x.moveTo(o,14); x.lineTo(o+14,0); x.stroke(); }
+  return ctx.createPattern(c,'repeat');
+}
 const HALF = GOAL_W / 2;              // 1.83
 const CIRCLE_R = 14.63;              // shooting circle radius from each post
 const OUTER_R = CIRCLE_R + 5;        // dashed line 5 m outside
@@ -408,7 +480,11 @@ const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R,18,14),
   new THREE.MeshStandardMaterial({color:0xffb347, roughness:.5, emissive:0x3a2400}));
 scene.add(ball);
 
-const keeperMat = new THREE.MeshStandardMaterial({color:0x2f9e8f, roughness:.7, side:THREE.DoubleSide});
+// Measured against the rendered pitch and sky under all four vision types:
+// the old teal sat at contrast 1.08 on the pitch (dE 4 under tritanopia --
+// effectively invisible). A dark keeper fixes the pitch and vanishes into the
+// sky instead; only a light one clears both (2.55 on pitch, 11.9 on sky).
+const keeperMat = new THREE.MeshStandardMaterial({color:0xffe9c9, roughness:.7, side:THREE.DoubleSide});
 const ghostMat  = new THREE.MeshStandardMaterial({color:0x9fd0ff, roughness:.8, side:THREE.DoubleSide, transparent:true, opacity:0.34});
 const keeper = new THREE.Group(); scene.add(keeper);      // silhouette rebuilt each update
 
@@ -494,9 +570,13 @@ function tri(a,b,c,color,op){
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([a.x,a.y,a.z, b.x,b.y,b.z, c.x,c.y,c.z]),3));
   return new THREE.Mesh(g, new THREE.MeshBasicMaterial({color, transparent:true, opacity:op, side:THREE.DoubleSide, depthWrite:false}));
 }
-function seg(x0,x1,color,y){ // thick box on the goal line
+function seg(x0,x1,color,y,hatched){ // thick box on the goal line
   const w=Math.max(0.0001,x1-x0);
-  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.09,0.09), new THREE.MeshBasicMaterial({color}));
+  const mat=hatched
+    ? new THREE.MeshBasicMaterial({color, map:hatchTex.clone()})
+    : new THREE.MeshBasicMaterial({color});
+  if(hatched){ mat.map.needsUpdate=true; mat.map.repeat.set(Math.max(1,w*6),1); }
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.09,0.09), mat);
   m.position.set((x0+x1)/2, (y||0.09), 0); return m;
 }
 function polyline(pts,color,dashed){ const l=lineFromPts(pts,color,dashed); return l; }
@@ -587,6 +667,33 @@ function faceCoverage(B,K,poly2d){
   return {pct:polyArea(poly)/(GOAL_W*GOAL_H)*100, poly};
 }
 let bxBall=0, bzBall=0;                                 // set each update for projGoal
+/* Hatch across the whole goal opening; the covered polygon is drawn over it,
+   so only the open net keeps its stripes. */
+/* The open net, as the goal mouth with the covered region cut out of it as a
+   hole, carrying both its colour and the hatch.
+
+   Hatching the whole mouth and painting the covered region over it does not
+   work: the covered region is semi-transparent, so the stripes show straight
+   through and both halves end up hatched -- which is precisely the reading the
+   hatch exists to avoid. Cutting the hole means the stripes cannot land on
+   covered net whatever its opacity.
+
+   ShapeGeometry's UVs come from the shape's own x/y, so texture repeat is in
+   metres and the stripe pitch stays fixed as the covered region changes. */
+function openFaceMesh(coveredPoly,z,color,op){
+  const sh=new THREE.Shape();
+  sh.moveTo(-HALF,0); sh.lineTo(HALF,0); sh.lineTo(HALF,GOAL_H); sh.lineTo(-HALF,GOAL_H); sh.closePath();
+  if(coveredPoly && coveredPoly.length>=3){
+    const h=new THREE.Path();
+    h.moveTo(coveredPoly[0][0],coveredPoly[0][1]);
+    for(let i=1;i<coveredPoly.length;i++) h.lineTo(coveredPoly[i][0],coveredPoly[i][1]);
+    h.closePath(); sh.holes.push(h);
+  }
+  const g=new THREE.ShapeGeometry(sh); g.translate(0,0,z);
+  const t=hatchTex.clone(); t.needsUpdate=true; t.repeat.set(2.6,2.6);
+  return new THREE.Mesh(g,new THREE.MeshBasicMaterial({
+    color, map:t, transparent:true, opacity:op, side:THREE.DoubleSide, depthWrite:false}));
+}
 function faceMesh(pts,z,color,op){                      // filled polygon on the goal plane (handles non-convex)
   if(pts.length<3) return null;
   const sh=new THREE.Shape(); sh.moveTo(pts[0][0],pts[0][1]);
@@ -624,10 +731,11 @@ function ensureKeeperMesh(poly){
 
 /* ---- heatmap: coverage % from every shot spot inside the D ---- */
 function insideD(x,z){ if(z<0) return false; const d=(Math.abs(x)<=HALF)?z:Math.hypot(Math.abs(x)-HALF,z); return d<=CIRCLE_R; }
-function heatColor(f){                                   // 0 = red, 0.5 = amber, 1 = green
+function heatColor(f){                                   // 0 = worst cover, 1 = best
   let r,g,b;
-  if(f<0.5){ const t=f/0.5; r=0.86+(0.95-0.86)*t; g=0.25+(0.80-0.25)*t; b=0.25+(0.30-0.25)*t; }
-  else { const t=(f-0.5)/0.5; r=0.95+(0.36-0.95)*t; g=0.80+(0.85-0.80)*t; b=0.30+(0.45-0.30)*t; }
+  const [lo,mid,hi]=PAL().heat;
+  if(f<0.5){ const t=f/0.5; r=lo[0]+(mid[0]-lo[0])*t; g=lo[1]+(mid[1]-lo[1])*t; b=lo[2]+(mid[2]-lo[2])*t; }
+  else { const t=(f-0.5)/0.5; r=mid[0]+(hi[0]-mid[0])*t; g=mid[1]+(hi[1]-mid[1])*t; b=mid[2]+(hi[2]-mid[2])*t; }
   return [r,g,b];
 }
 function groundPct(S,Kc,sil){
@@ -681,16 +789,19 @@ function drawBillboard(d){
   c.lineWidth=2; c.strokeStyle='rgba(120,150,180,0.35)'; c.stroke();
   c.textBaseline='top';
   c.fillStyle='#37d6c6'; c.font='bold 24px system-ui,Arial'; c.fillText((d.metric+' covered').toUpperCase(), 30, 26);
-  c.fillStyle='#5be08a'; c.font='bold 100px system-ui,Arial'; c.fillText(Math.round(d.pct)+'%', 24, 52);
+  c.fillStyle=PAL().coveredCss; c.font='bold 100px system-ui,Arial'; c.fillText(Math.round(d.pct)+'%', 24, 52);
   c.fillStyle='#8ea6b6'; c.font='20px system-ui,Arial'; c.fillText('near open', 300, 58);
   c.fillStyle='#e9f0f5'; c.font='bold 34px system-ui,Arial'; c.fillText((d.nearGap*100).toFixed(0)+' cm', 300, 82);
   c.fillStyle='#8ea6b6'; c.font='20px system-ui,Arial'; c.fillText('far open', 300, 128);
   c.fillStyle='#e9f0f5'; c.font='bold 34px system-ui,Arial'; c.fillText((d.farGap*100).toFixed(0)+' cm', 300, 152);
-  // goal-mouth schematic (red = open, green = covered)
+  // goal-mouth schematic: open net first, hatched, then the covered region over it
   const sw=300, sh=sw*(GOAL_H/GOAL_W), sx=(W-sw)/2, sy=200;
   const mapx=X=>sx+(X+HALF)/GOAL_W*sw, mapy=Y=>sy+(1-Y/GOAL_H)*sh;
-  c.fillStyle='rgba(255,107,107,0.85)'; c.fillRect(sx,sy,sw,sh);
-  c.fillStyle='rgba(91,224,138,0.92)';
+  c.fillStyle=PAL().openFill; c.fillRect(sx,sy,sw,sh);
+  // Hatch the whole mouth, then paint the covered region over it: open net
+  // ends up striped, covered stays flat, so the two separate without colour.
+  c.save(); c.fillStyle=hatchPattern(c,0.55); c.fillRect(sx,sy,sw,sh); c.restore();
+  c.fillStyle=PAL().coveredFill;
   if(d.facePoly && d.facePoly.length>=3){
     c.beginPath(); d.facePoly.forEach((p,i)=>{ const X=mapx(p[0]),Y=mapy(p[1]); i?c.lineTo(X,Y):c.moveTo(X,Y); }); c.closePath(); c.fill();
   } else if(d.coveredW>0){
@@ -797,9 +908,10 @@ function update(){
   }
   if(el('oCover').checked){
     if(useFace){
-      // shade the goal opening: red face, green covered region on top
-      viz.add(faceMesh([[-HALF,0],[HALF,0],[HALF,GOAL_H],[-HALF,GOAL_H]], 0.0, 0xff6b6b, 0.22));
-      if(face && face.poly.length>=3) viz.add(faceMesh(face.poly, 0.05, 0x5be08a, 0.5));
+      // Open net carries the colour and the hatch, with the covered region cut
+      // out of it, so the two never share a pattern. Covered goes on top, flat.
+      viz.add(openFaceMesh(face&&face.poly.length>=3?face.poly:null, 0.0, PAL().open, 0.30));
+      if(face && face.poly.length>=3) viz.add(faceMesh(face.poly, 0.05, PAL().covered, 0.5));
       viz.add(polyline([new THREE.Vector3(-HALF,0,0),new THREE.Vector3(HALF,0,0),
         new THREE.Vector3(HALF,GOAL_H,0),new THREE.Vector3(-HALF,GOAL_H,0),new THREE.Vector3(-HALF,0,0)],0xdfeef2));
     } else if(xa!==null){
@@ -807,10 +919,10 @@ function update(){
       viz.add(tri(v3(B,0.015), new THREE.Vector3(xa,0.015,0), new THREE.Vector3(xb,0.015,0), 0x33424c, 0.28));
       viz.add(polyline([v3(B,yb),new THREE.Vector3(xa,yb,0)],0x9fb3bd));
       viz.add(polyline([v3(B,yb),new THREE.Vector3(xb,yb,0)],0x9fb3bd));
-      // goalmouth: green covered, red gaps
-      if(leftGap>0)  viz.add(seg(-HALF, coveredW>0?covL:HALF, 0xff6b6b));
-      if(coveredW>0) viz.add(seg(covL, covR, 0x5be08a));
-      if(rightGap>0) viz.add(seg(covR, HALF, 0xff6b6b));
+      // goalmouth: covered solid, open gaps hatched
+      if(leftGap>0)  viz.add(seg(-HALF, coveredW>0?covL:HALF, PAL().open, undefined, true));
+      if(coveredW>0) viz.add(seg(covL, covR, PAL().covered));
+      if(rightGap>0) viz.add(seg(covR, HALF, PAL().open, undefined, true));
     }
   }
   if(el('oPyr').checked){
@@ -1046,6 +1158,35 @@ function setPosture(p){
 }
 document.querySelectorAll('#postSeg button').forEach(b=>b.addEventListener('click',()=>setPosture(b.dataset.po)));
 
+/* The palette drives CSS custom properties, the three materials rebuilt by
+   update(), the billboard canvas and the heatmap ramp, so switching it is
+   just: set the CSS vars, then redraw everything. */
+function setPalette(p){
+  palette=(p==='safe')?'safe':'classic';
+  const pal=PAL();
+  document.documentElement.style.setProperty('--green',pal.coveredCss);
+  document.documentElement.style.setProperty('--red',pal.openCss);
+  const b=el('palBtn');
+  b.textContent='Colours: '+(palette==='safe'?'safe':'classic');
+  b.classList.toggle('on',palette==='safe');
+  b.setAttribute('aria-pressed',String(palette==='safe'));
+  if(heatGroup.children.length) computeHeatmap();   // the ramp changed under it
+  update();
+}
+/* Prefill the report with the exact scene. The share link carries ball,
+   keeper, camera and every setting, which beats any description of them. */
+el('bugLink').addEventListener('click',function(){
+  writeUrl();
+  const q=new URLSearchParams({template:'on_the_angle_bug.yml',
+    device:navigator.userAgent+' -- '+innerWidth+'x'+innerHeight+' at '+(devicePixelRatio||1)+'x'});
+  // Only a real hosted URL is worth carrying: opened from a file, or as a
+  // data: document, location.href is either useless or enormous.
+  if(/^https?:/.test(location.href) && location.href.length<1500) q.set('share_link',location.href);
+  this.href='https://github.com/BWeesy/gubbins/issues/new?'+q.toString();
+});
+
+el('palBtn').addEventListener('click',()=>setPalette(palette==='safe'?'classic':'safe'));
+
 function setPass(on){
   passOn=on;
   el('passBtn').textContent='Pass move: '+(on?'on':'off');
@@ -1127,7 +1268,7 @@ function serialise(){
   const ov=(el('oCone').checked?1:0)|(el('oBis').checked?2:0)|(el('oCover').checked?4:0)|(el('oPyr').checked?8:0)|(el('oGrid').checked?16:0)|(el('oBillboard').checked?32:0);
   return { bx:+el('bx').value, bz:+el('bz').value, km:keeperMode, pr:priority, off:+el('off').value,
     kx:+el('kx').value, kz:+el('kz').value, kw:+el('kw').value, kh:+el('kh').value, om:+el('offMax').value,
-    cov:coverageMode, po:posture, cm:coordMode, ps:passOn?1:0, px:+el('px').value, pz:+el('pz').value, ov,
+    cov:coverageMode, po:posture, cm:coordMode, ps:passOn?1:0, px:+el('px').value, pz:+el('pz').value, ov, pal:palette,
     // Camera as one field rather than six: the hash stays readable and parses
     // in a single step. "~" survives encodeURIComponent untouched; "," does not.
     cam:[cam.target.x.toFixed(2),cam.target.y.toFixed(2),cam.target.z.toFixed(2),
@@ -1154,6 +1295,7 @@ function readUrl(){
     el('off').max=m; if(+el('off').value>m) el('off').value=m;
     el('offMaxVal').textContent=m.toFixed(1)+' m';
   }
+  if(p.pal==='safe'||p.pal==='classic') palette=p.pal;
   if(p.cm) coordMode=p.cm;
   if(p.km) keeperMode=p.km;
   if(p.pr) priority=p.pr;
@@ -1182,6 +1324,7 @@ el('copyBtn').addEventListener('click',()=>{
 });
 function initFromUrl(){
   readUrl();
+  setPalette(palette);
   // A link carrying its own camera is not sitting on the Default preset.
   if(camFromUrl) clearViewButtons();
   setCoord(coordMode);
