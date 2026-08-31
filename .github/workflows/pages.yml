@@ -1,0 +1,44 @@
+name: pages
+
+# Publishes on-the-angle/ as the GitHub Pages site. Pages is configured in the
+# repo settings with source "GitHub Actions", so this workflow is the only
+# thing that deploys -- there is no gh-pages branch to keep in sync.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'on-the-angle/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  # deploy-pages authenticates to the Pages API with an OIDC token, not a PAT.
+  id-token: write
+
+# A queued deploy supersedes an older one, but never cancels a run that is
+# already mid-deploy: Pages would be left half-updated.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The site is a single self-contained page, so on-the-angle/ is uploaded
+      # as the site root: the deployed URL is <pages-url>/ , not /on-the-angle/.
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: on-the-angle
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

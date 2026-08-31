@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>On The Angle — field-hockey keeper positioning</title>
+<style>
+  :root{
+    --bg:#0b1220; --panel:rgba(16,26,40,.82); --edge:rgba(120,150,180,.22);
+    --ink:#e9f0f5; --muted:#8ea6b6; --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --cyan:#37d6c6; --cyanDim:#1c6f68; --green:#5be08a; --red:#ff6b6b; --amber:#ffcf5c;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden}
+  #stage{position:fixed;inset:0}
+  canvas{display:block;touch-action:none}
+
+  .panel{
+    position:fixed;background:var(--panel);border:1px solid var(--edge);border-radius:12px;
+    backdrop-filter:blur(9px);-webkit-backdrop-filter:blur(9px);box-shadow:0 8px 30px rgba(0,0,0,.35);
+  }
+  #controls{top:12px;left:12px;width:266px;max-height:calc(100vh - 24px);overflow:auto;padding:12px 13px}
+  #ctlHeader{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none}
+  #ctlHeader h1{margin:0}
+  #collapseBtn{padding:2px 9px;font-size:14px;line-height:1;border-radius:7px}
+  #collapseBtn .chev{display:inline-block;transition:transform .15s}
+  #controls.collapsed{width:auto}
+  #controls.collapsed #controlsBody{display:none}
+  #controls.collapsed #collapseBtn .chev{transform:rotate(-90deg)}
+  #readout{top:12px;right:12px;width:236px;padding:12px 13px}
+  #views{left:50%;bottom:12px;transform:translateX(-50%);padding:7px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 24px)}
+  #hint{right:12px;bottom:12px;padding:8px 10px;font-size:11px;color:var(--muted);max-width:230px;line-height:1.45}
+
+  h1{font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin:0 0 2px;color:var(--ink)}
+  .sub{font-size:11px;color:var(--muted);margin:0 0 10px}
+  .group{border-top:1px solid var(--edge);padding-top:9px;margin-top:9px}
+  .glabel{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--cyan);margin-bottom:7px;font-weight:600}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:7px 0}
+  .row label{font-size:12px;color:var(--ink)}
+  .val{font-family:var(--mono);font-size:11.5px;color:var(--muted);min-width:52px;text-align:right}
+  input[type=range]{width:100%;accent-color:var(--cyan);height:20px}
+  .slider{margin:2px 0 8px}
+  .seg{display:flex;gap:4px}
+  .seg button{flex:1}
+  .seg.wrap{flex-wrap:wrap}
+  .seg.wrap button{flex:1 1 46%}
+  button{
+    font-family:var(--sans);font-size:11.5px;color:var(--ink);background:rgba(255,255,255,.05);
+    border:1px solid var(--edge);border-radius:8px;padding:6px 8px;cursor:pointer;transition:.12s;
+  }
+  button:hover{background:rgba(255,255,255,.11)}
+  button.on{background:var(--cyanDim);border-color:var(--cyan);color:#eafffb}
+  button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  #supportLink{display:block;margin-top:9px;font-size:11.5px;color:var(--muted);text-align:center;text-decoration:none;line-height:1.4}
+  #supportLink:hover{color:var(--cyan)}
+  .chk{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:12px;cursor:pointer;user-select:none}
+  .chk input{accent-color:var(--cyan);width:15px;height:15px}
+
+  .stat{display:flex;justify-content:space-between;align-items:baseline;margin:6px 0;font-size:12px}
+  .stat .k{color:var(--muted)}
+  .stat .v{font-family:var(--mono);font-size:13px}
+  .big{font-size:15px}
+  .cover-bar{height:10px;border-radius:5px;background:var(--red);overflow:hidden;margin:6px 0 8px;border:1px solid var(--edge)}
+  .cover-fill{height:100%;background:var(--green);width:0%}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  .cvPct{font-family:var(--mono);font-size:42px;line-height:1;font-weight:600;color:var(--green);margin:2px 0}
+  .cvGaps{font-size:11.5px;color:var(--muted);margin-bottom:2px}
+  .cvGaps b{font-family:var(--mono);color:var(--ink);font-weight:600}
+  .cvNote{font-size:10px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px solid var(--edge);line-height:1.4}
+  #readoutDetail{margin-top:10px;padding-top:8px;border-top:1px solid var(--edge)}
+  @media (max-width:560px){
+    #controls{width:216px} #hint{display:none}
+    #readout{width:154px} #readoutDetail{display:none} .cvPct{font-size:34px}
+  }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<div id="controls" class="panel">
+  <div id="ctlHeader">
+    <h1>On The Angle</h1>
+    <button id="collapseBtn" aria-expanded="true" title="Collapse panel"><span class="chev">▾</span></button>
+  </div>
+  <div id="controlsBody">
+  <p class="sub">Field-hockey shooting geometry. Drag to orbit · scroll to zoom · right-drag to pan.</p>
+
+  <div class="group" style="border-top:none;padding-top:0;margin-top:0">
+    <div class="glabel">Coordinates</div>
+    <div class="seg">
+      <button id="coordCart" class="on">Cartesian</button>
+      <button id="coordPolar">Polar</button>
+    </div>
+    <p class="sub" style="margin:7px 0 0">Polar is from goal centre: θ = 0° straight out, ± to each side; r = distance from goal.</p>
+  </div>
+
+  <div class="group">
+    <div class="glabel">Scenarios</div>
+    <div class="seg wrap" id="scenSeg">
+      <button data-s="topD">Top of D</button>
+      <button data-s="tight">Tight angle</button>
+      <button data-s="stroke">Stroke</button>
+      <button data-s="pcflick">PC flick</button>
+      <button data-s="switch">Switch play</button>
+      <button data-s="oneVone">1v1</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="glabel">Shot (ball)</div>
+    <button id="placeBtn" style="width:100%;margin-bottom:8px">Click pitch to place ball: off</button>
+    <div id="ballCart">
+      <div class="row"><label>Across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="bxVal"></span></div>
+      <input class="slider" id="bx" type="range" min="-14" max="14" step="0.1" value="4.5">
+      <div class="row"><label>From backline &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="bzVal"></span></div>
+      <input class="slider" id="bz" type="range" min="0.6" max="20" step="0.1" value="11">
+    </div>
+    <div id="ballPolar" style="display:none">
+      <div class="row"><label>Angle &nbsp;<span style="color:var(--muted)">θ</span></label><span class="val" id="baVal"></span></div>
+      <input class="slider" id="ba" type="range" min="-85" max="85" step="1" value="22">
+      <div class="row"><label>Radius &nbsp;<span style="color:var(--muted)">r</span></label><span class="val" id="brVal"></span></div>
+      <input class="slider" id="br" type="range" min="0.6" max="24" step="0.1" value="11.9">
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="glabel">Goalkeeper</div>
+    <div class="seg" style="margin-bottom:9px">
+      <button id="modeBis" class="on">Guided</button>
+      <button id="modeFree">Free</button>
+    </div>
+
+    <div id="bisCtl">
+      <div class="row" style="margin-bottom:5px"><label style="font-size:11px;color:var(--muted)">Cover corner</label></div>
+      <div class="seg" id="prioSeg" style="margin-bottom:9px">
+        <button data-p="near">Near</button>
+        <button data-p="centre" class="on">Centre</button>
+        <button data-p="far">Far</button>
+      </div>
+      <div class="row"><label>Off the line</label><span class="val" id="offVal"></span></div>
+      <input class="slider" id="off" type="range" min="0" max="6" step="0.05" value="2">
+    </div>
+
+    <div id="freeCtl" style="display:none">
+      <button id="keeperPlaceBtn" style="width:100%;margin-bottom:8px">Click pitch to place keeper: off</button>
+      <div id="kFreeCart">
+        <div class="row"><label>Across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="kxVal"></span></div>
+        <input class="slider" id="kx" type="range" min="-8" max="8" step="0.05" value="0">
+        <div class="row"><label>From backline &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="kzVal"></span></div>
+        <input class="slider" id="kz" type="range" min="0.2" max="12" step="0.05" value="2">
+      </div>
+      <div id="kFreePolar" style="display:none">
+        <div class="row"><label>Angle &nbsp;<span style="color:var(--muted)">θ</span></label><span class="val" id="kaVal"></span></div>
+        <input class="slider" id="ka" type="range" min="-85" max="85" step="1" value="0">
+        <div class="row"><label>Radius &nbsp;<span style="color:var(--muted)">r</span></label><span class="val" id="krVal"></span></div>
+        <input class="slider" id="kr" type="range" min="0.3" max="12" step="0.1" value="2">
+      </div>
+    </div>
+
+    <div class="row"><label>Blocking width</label><span class="val" id="kwVal"></span></div>
+    <input class="slider" id="kw" type="range" min="0.4" max="1.6" step="0.05" value="0.9">
+    <div class="row"><label>Max off the line</label><span class="val" id="offMaxVal"></span></div>
+    <input class="slider" id="offMax" type="range" min="1" max="14" step="0.1" value="6.4">
+  </div>
+
+  <div class="group">
+    <div class="glabel">Coverage metric</div>
+    <div class="seg" style="margin-bottom:9px">
+      <button id="covGround">Ground line</button>
+      <button id="covFace" class="on">Goal face</button>
+    </div>
+    <div class="row"><label>Keeper height</label><span class="val" id="khVal"></span></div>
+    <input class="slider" id="kh" type="range" min="1.2" max="2.4" step="0.05" value="1.8">
+    <div class="row" style="margin:2px 0 5px"><label style="font-size:11px;color:var(--muted)">Keeper posture</label></div>
+    <div class="seg" id="postSeg">
+      <button data-po="set" class="on">Set</button>
+      <button data-po="spread">Spread</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="glabel">Pass-then-shoot</div>
+    <button id="passBtn" style="width:100%;margin-bottom:8px">Enable pass move: off</button>
+    <div id="passCtl" style="display:none">
+      <button id="passPlaceBtn" style="width:100%;margin-bottom:8px">Click pitch to place passer: off</button>
+      <div class="row"><label>Passer across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="pxVal"></span></div>
+      <input class="slider" id="px" type="range" min="-14" max="14" step="0.1" value="-8">
+      <div class="row"><label>Passer from line &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="pzVal"></span></div>
+      <input class="slider" id="pz" type="range" min="0.6" max="24" step="0.1" value="6">
+      <p class="sub" style="margin:6px 0 0">Blue = passer. Ghost keeper = set for the pass; amber arrow = the move needed to cover the shot.</p>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="glabel">Overlays</div>
+    <label class="chk"><input type="checkbox" id="oCone" checked> Shot cone (ball → posts)</label>
+    <label class="chk"><input type="checkbox" id="oBis" checked> Centre line (bisector)</label>
+    <label class="chk"><input type="checkbox" id="oCover" checked> Coverage &amp; gaps at goal</label>
+    <label class="chk"><input type="checkbox" id="oPyr"> 3D shot cone (to corners)</label>
+    <label class="chk"><input type="checkbox" id="oGrid" checked> 1 m grid</label>
+    <label class="chk"><input type="checkbox" id="oBillboard" checked> Stats billboard (over goal)</label>
+  </div>
+
+  <div class="group">
+    <div class="glabel">Heatmap</div>
+    <p class="sub" style="margin:0 0 8px">Coverage % from every shot spot in the D, for the current keeper setup. Recompute after changes.</p>
+    <div class="seg">
+      <button id="heatCompute">Compute</button>
+      <button id="heatClear">Clear</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="glabel">Share</div>
+    <button id="copyBtn" style="width:100%">Copy link to this position</button>
+    <a href="https://ko-fi.com/bweesy" target="_blank" rel="noopener" id="supportLink">Free for keepers everywhere — if it helped, ☕ buy me a coffee</a>
+  </div>
+  </div>
+</div>
+
+<div id="readout" class="panel">
+  <div class="glabel" style="color:var(--cyan)">Goal covered</div>
+  <div class="cvPct" id="rCov">–</div>
+  <div class="cover-bar"><div class="cover-fill" id="rBar"></div></div>
+  <div class="cvGaps"><span class="dot" style="background:var(--red)"></span>near <b id="rNear">–</b> &nbsp;·&nbsp; <span class="dot" style="background:var(--red)"></span>far <b id="rFar">–</b> open</div>
+  <div id="readoutDetail">
+    <div class="stat"><span class="k">Shot from</span><span class="v" id="rBall">–</span></div>
+    <div class="stat"><span class="k">Goal angle at ball</span><span class="v" id="rGoal">–</span></div>
+    <div class="stat"><span class="k">Off centre line</span><span class="v" id="rBias">–</span></div>
+    <div class="stat"><span class="k">Ball → keeper</span><span class="v" id="rDist">–</span></div>
+    <div class="stat" id="rReposRow" style="display:none"><span class="k">Reposition (pass)</span><span class="v" id="rRepos">–</span></div>
+  </div>
+  <div class="cvNote" id="cvNote"></div>
+</div>
+
+<div id="views" class="panel">
+  <button data-v="reset" class="on">Default</button>
+  <button data-v="plan">Plan</button>
+  <button data-v="behind">Behind goal</button>
+  <button data-v="atk">Attacker POV</button>
+  <button data-v="gk">Keeper POV</button>
+</div>
+
+<div id="hint" class="panel">
+  Green = net the keeper covers. Red = open net. Advance the keeper along the bisector to watch the cone close.
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+/* ------------------------------------------------------------------ */
+/*  Field-hockey dimensions (metres)                                   */
+/* ------------------------------------------------------------------ */
+const GOAL_W = 3.66, GOAL_H = 2.14, POST = 0.051, GOAL_DEPTH = 1.20, BACKBOARD_H = 0.46;
+const HALF = GOAL_W / 2;              // 1.83
+const CIRCLE_R = 14.63;              // shooting circle radius from each post
+const OUTER_R = CIRCLE_R + 5;        // dashed line 5 m outside
+const PEN_SPOT = 6.40;               // penalty stroke spot
+const BALL_R = 0.06;                 // slightly exaggerated for visibility
+const Y_LINE = 0.012, Y_GRID = 0.006, Y_MARK = 0.05;
+
+// posts (inner front corners) in ground plane, using Vector2(x = across, y = depth)
+const pL = new THREE.Vector2(-HALF, 0);
+const pR = new THREE.Vector2( HALF, 0);
+
+/* ------------------------------------------------------------------ */
+/*  Scene setup                                                        */
+/* ------------------------------------------------------------------ */
+const stage = document.getElementById('stage');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1220);
+scene.fog = new THREE.Fog(0x0b1220, 40, 90);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 300);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+stage.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xbfe0ff, 0x1a2432, 0.9));
+const dir = new THREE.DirectionalLight(0xffffff, 0.75);
+dir.position.set(8, 20, 12); scene.add(dir);
+
+/* ---- pitch ---- */
+const pitch = new THREE.Mesh(
+  new THREE.PlaneGeometry(48, 40),
+  new THREE.MeshStandardMaterial({color:0x0e5c67, roughness:1, metalness:0})
+);
+pitch.rotation.x = -Math.PI/2; pitch.position.set(0,0,15);
+scene.add(pitch);
+
+/* ---- 1 m grid (toggle) ---- */
+const grid = new THREE.GridHelper(48, 48, 0x2a5a63, 0x1c3f47);
+grid.position.set(0, Y_GRID, 15);
+grid.material.transparent = true; grid.material.opacity = 0.4;
+scene.add(grid);
+
+/* ------------------------------------------------------------------ */
+/*  Pitch markings                                                     */
+/* ------------------------------------------------------------------ */
+function lineFromPts(pts, color, dashed){
+  const g = new THREE.BufferGeometry().setFromPoints(pts);
+  let m;
+  if(dashed){
+    m = new THREE.LineDashedMaterial({color, dashSize:0.35, gapSize:0.3, transparent:true, opacity:0.7});
+    const l = new THREE.Line(g, m); l.computeLineDistances(); return l;
+  }
+  m = new THREE.LineBasicMaterial({color});
+  return new THREE.Line(g, m);
+}
+function arc(cx, cz, r, a0, a1, steps){
+  const pts = [];
+  for(let i=0;i<=steps;i++){ const a=a0+(a1-a0)*i/steps; pts.push(new THREE.Vector3(cx+r*Math.cos(a), Y_LINE, cz+r*Math.sin(a))); }
+  return pts;
+}
+// shooting circle (D): left arc -> flat top -> right arc
+const dPts = [
+  ...arc(pL.x,0,CIRCLE_R,Math.PI,Math.PI/2,48),
+  new THREE.Vector3( HALF, Y_LINE, CIRCLE_R),
+  ...arc(pR.x,0,CIRCLE_R,Math.PI/2,0,48)
+];
+scene.add(lineFromPts(dPts, 0xdfeef2));
+// outer dashed 5 m line
+const oPts = [
+  ...arc(pL.x,0,OUTER_R,Math.PI,Math.PI/2,56),
+  new THREE.Vector3( HALF, Y_LINE, OUTER_R),
+  ...arc(pR.x,0,OUTER_R,Math.PI/2,0,56)
+];
+scene.add(lineFromPts(oPts, 0x9fc4cc, true));
+// backline
+scene.add(lineFromPts([new THREE.Vector3(-22,Y_LINE,0), new THREE.Vector3(22,Y_LINE,0)], 0xdfeef2));
+// 23 m line
+scene.add(lineFromPts([new THREE.Vector3(-22,Y_LINE,22.9), new THREE.Vector3(22,Y_LINE,22.9)], 0x6f9aa4, true));
+// penalty spot
+{
+  const spot = new THREE.Mesh(new THREE.CircleGeometry(0.075,20),
+    new THREE.MeshBasicMaterial({color:0xdfeef2}));
+  spot.rotation.x=-Math.PI/2; spot.position.set(0,Y_MARK,PEN_SPOT); scene.add(spot);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Goal frame + net                                                   */
+/* ------------------------------------------------------------------ */
+const white = new THREE.MeshStandardMaterial({color:0xf2f6f8, roughness:.6});
+function post(x){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(POST,GOAL_H,POST), white);
+  m.position.set(x, GOAL_H/2, 0); return m;
+}
+scene.add(post(-HALF)); scene.add(post(HALF));
+{
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(GOAL_W+POST,POST,POST), white);
+  bar.position.set(0, GOAL_H, 0); scene.add(bar);
+}
+// net (translucent) — back, sides, top behind the line (negative z)
+const netMat = new THREE.MeshBasicMaterial({color:0xbcd3da, transparent:true, opacity:0.10, side:THREE.DoubleSide});
+function panel(w,h, px,py,pz, rotY){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w,h), netMat);
+  m.position.set(px,py,pz); if(rotY) m.rotation.y=rotY; return m;
+}
+scene.add(panel(GOAL_W,GOAL_H, 0,GOAL_H/2,-GOAL_DEPTH));                 // back
+scene.add(panel(GOAL_DEPTH,GOAL_H, -HALF,GOAL_H/2,-GOAL_DEPTH/2, Math.PI/2)); // left side
+scene.add(panel(GOAL_DEPTH,GOAL_H,  HALF,GOAL_H/2,-GOAL_DEPTH/2, Math.PI/2)); // right side
+{
+  const top = new THREE.Mesh(new THREE.PlaneGeometry(GOAL_W,GOAL_DEPTH), netMat);
+  top.rotation.x=-Math.PI/2; top.position.set(0,GOAL_H,-GOAL_DEPTH/2); scene.add(top);
+  // net wireframe hint on back
+  const wire = new THREE.Mesh(new THREE.PlaneGeometry(GOAL_W,GOAL_H,10,6),
+    new THREE.MeshBasicMaterial({color:0x8fb0b8, wireframe:true, transparent:true, opacity:0.16}));
+  wire.position.set(0,GOAL_H/2,-GOAL_DEPTH+0.01); scene.add(wire);
+  // backboard
+  const bb = new THREE.Mesh(new THREE.BoxGeometry(GOAL_W,BACKBOARD_H,0.03),
+    new THREE.MeshStandardMaterial({color:0x22333c}));
+  bb.position.set(0,BACKBOARD_H/2,-GOAL_DEPTH); scene.add(bb);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Ball + keeper                                                      */
+/* ------------------------------------------------------------------ */
+const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R,18,14),
+  new THREE.MeshStandardMaterial({color:0xffb347, roughness:.5, emissive:0x3a2400}));
+scene.add(ball);
+
+const keeperMat = new THREE.MeshStandardMaterial({color:0x2f9e8f, roughness:.7, side:THREE.DoubleSide});
+const ghostMat  = new THREE.MeshStandardMaterial({color:0x9fd0ff, roughness:.8, side:THREE.DoubleSide, transparent:true, opacity:0.34});
+const keeper = new THREE.Group(); scene.add(keeper);      // silhouette rebuilt each update
+
+// passer (pass-then-shoot) + its visuals group
+const passer = new THREE.Mesh(new THREE.SphereGeometry(BALL_R,18,14),
+  new THREE.MeshStandardMaterial({color:0x6fa8ff, roughness:.5, emissive:0x102438}));
+passer.visible=false; scene.add(passer);
+const passGroup = new THREE.Group(); scene.add(passGroup);
+const heatGroup = new THREE.Group(); scene.add(heatGroup);
+
+/* floating stats billboard over the goal (canvas texture on a camera-facing sprite) */
+const bbCanvas=document.createElement('canvas'); bbCanvas.width=480; bbCanvas.height=420;
+const bbCtx=bbCanvas.getContext('2d');
+const bbTex=new THREE.CanvasTexture(bbCanvas); bbTex.minFilter=THREE.LinearFilter;
+const BB_ASPECT=bbCanvas.width/bbCanvas.height;
+const billboard=new THREE.Sprite(new THREE.SpriteMaterial({map:bbTex, transparent:true, depthTest:true, depthWrite:false}));
+billboard.position.set(0,3.2,0); scene.add(billboard);
+
+/* ------------------------------------------------------------------ */
+/*  Live geometry overlay group                                        */
+/* ------------------------------------------------------------------ */
+const viz = new THREE.Group(); scene.add(viz);
+function clearViz(){
+  for(let i=viz.children.length-1;i>=0;i--){
+    const o=viz.children[i]; viz.remove(o);
+    if(o.geometry) o.geometry.dispose();
+    if(o.material) o.material.dispose();
+  }
+}
+const v3 = (v2,y)=>new THREE.Vector3(v2.x, y||0, v2.y);           // ground Vector2 -> Vector3
+function tri(a,b,c,color,op){
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([a.x,a.y,a.z, b.x,b.y,b.z, c.x,c.y,c.z]),3));
+  return new THREE.Mesh(g, new THREE.MeshBasicMaterial({color, transparent:true, opacity:op, side:THREE.DoubleSide, depthWrite:false}));
+}
+function seg(x0,x1,color,y){ // thick box on the goal line
+  const w=Math.max(0.0001,x1-x0);
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.09,0.09), new THREE.MeshBasicMaterial({color}));
+  m.position.set((x0+x1)/2, (y||0.09), 0); return m;
+}
+function polyline(pts,color,dashed){ const l=lineFromPts(pts,color,dashed); return l; }
+
+/* ---- geometry helpers ---- */
+function angBetween(v1,v2){ return Math.atan2(Math.abs(v1.x*v2.y - v1.y*v2.x), v1.x*v2.x + v1.y*v2.y); }
+function projToLine(B,T){ // x where ray B->T crosses depth=0 (goal line); null if not forward
+  const denom = B.y - T.y; if(Math.abs(denom)<1e-6) return null;
+  const s = B.y/denom; if(s<=0) return null;
+  return B.x + s*(T.x - B.x);
+}
+function bisectorDir(B){
+  const uL=pL.clone().sub(B).normalize(), uR=pR.clone().sub(B).normalize();
+  return uL.clone().add(uR).normalize();
+}
+function keeperOnBisector(B,d){
+  const bis=bisectorDir(B);
+  const dd=Math.min(d, B.y-0.3);
+  const t=(dd - B.y)/bis.y;
+  return B.clone().add(bis.clone().multiplyScalar(t));
+}
+function coverageAt(B,K,kw){ // -> {pct, left gap, right gap} at the goal line
+  const dir=B.clone().sub(K).normalize();
+  const perp=new THREE.Vector2(-dir.y, dir.x);
+  const E1=K.clone().add(perp.clone().multiplyScalar(kw/2));
+  const E2=K.clone().add(perp.clone().multiplyScalar(-kw/2));
+  const xa=projToLine(B,E1), xb=projToLine(B,E2);
+  if(xa===null||xb===null) return {pct:0,left:GOAL_W,right:0};
+  const covL=Math.max(-HALF,Math.min(xa,xb)), covR=Math.min(HALF,Math.max(xa,xb));
+  const cw=Math.max(0,covR-covL);
+  return {pct:cw/GOAL_W*100, left:Math.max(0,covL+HALF), right:Math.max(0,HALF-covR)};
+}
+function shadowSpan(B,K,kw){ // unclamped shadow edges on the goal line: [min,max]
+  const dir=B.clone().sub(K).normalize();
+  const perp=new THREE.Vector2(-dir.y, dir.x);
+  const E1=K.clone().add(perp.clone().multiplyScalar(kw/2));
+  const E2=K.clone().add(perp.clone().multiplyScalar(-kw/2));
+  const xa=projToLine(B,E1), xb=projToLine(B,E2);
+  if(xa===null||xb===null) return null;
+  return [Math.min(xa,xb), Math.max(xa,xb)];
+}
+// place the guided keeper at depth d according to priority (near/centre/far corner)
+function guidedKeeper(B,d,prio,kw){
+  d=Math.min(Math.max(d,0), B.y-0.85);
+  if(prio==='centre') return keeperOnBisector(B,d);
+  const near=(B.x>=0)?1:-1;                       // +1 if near post is on +x side
+  const postX=(prio==='near')? near*HALF : -near*HALF;
+  const trackMax=postX>0;                          // pin the shadow edge nearest that post
+  const edgeErr=x=>{ const sp=shadowSpan(B,new THREE.Vector2(x,d),kw);
+    if(!sp) return trackMax?-1e3:1e3; return (trackMax?sp[1]:sp[0])-postX; };
+  let lo=-14, hi=14;                               // edgeErr rises monotonically with x
+  for(let i=0;i<30;i++){ const mid=(lo+hi)/2; if(edgeErr(mid)>0) hi=mid; else lo=mid; }
+  return new THREE.Vector2((lo+hi)/2, d);
+}
+
+/* ---- full goal-face (2D) coverage: keeper modelled as a vertical wall ---- */
+const BALL_H=BALL_R;                                   // shot origin height above ground
+function projGoal(Bx,By,Bz, Px,Py,Pz){                 // project point P from ball onto goal plane z=0
+  const denom=Bz-Pz; if(denom<=1e-6) return null;      // P must be in front of the ball
+  const t=Bz/denom;                                    // z(t)=0
+  return [Bx + t*(Px-Bx), By + t*(Py-By)];
+}
+function clipHP(poly,f){                                // Sutherland-Hodgman half-plane clip (inside: f<=0)
+  const out=[], n=poly.length;
+  for(let i=0;i<n;i++){
+    const a=poly[i], b=poly[(i+1)%n], fa=f(a), fb=f(b), ain=fa<=0, bin=fb<=0;
+    if(ain) out.push(a);
+    if(ain!==bin){ const t=fa/(fa-fb); out.push([a[0]+t*(b[0]-a[0]), a[1]+t*(b[1]-a[1])]); }
+  }
+  return out;
+}
+function polyArea(p){ let s=0; for(let i=0;i<p.length;i++){ const a=p[i], b=p[(i+1)%p.length]; s+=a[0]*b[1]-b[0]*a[1]; } return Math.abs(s)/2; }
+// keeper silhouette (local polygon of [s,y]) projected onto the goal opening; clipped to the mouth
+function faceCoverage(B,K,poly2d){
+  const dir=B.clone().sub(K).normalize();
+  const ux=-dir.y, uz=dir.x;                            // horizontal perpendicular (world x,z)
+  const quad=[];
+  for(const sy of poly2d){
+    const wx=K.x+sy[0]*ux, wz=K.y+sy[0]*uz;
+    const q=projGoal(bxBall,BALL_H,bzBall, wx,sy[1],wz);
+    if(!q) return null; quad.push(q);
+  }
+  let poly=quad;
+  poly=clipHP(poly,p=>-(p[0]+HALF));   // x >= -HALF
+  poly=clipHP(poly,p=> p[0]-HALF);     // x <=  HALF
+  poly=clipHP(poly,p=>-p[1]);          // y >= 0
+  poly=clipHP(poly,p=> p[1]-GOAL_H);   // y <= GOAL_H
+  return {pct:polyArea(poly)/(GOAL_W*GOAL_H)*100, poly};
+}
+let bxBall=0, bzBall=0;                                 // set each update for projGoal
+function faceMesh(pts,z,color,op){                      // filled polygon on the goal plane (handles non-convex)
+  if(pts.length<3) return null;
+  const sh=new THREE.Shape(); sh.moveTo(pts[0][0],pts[0][1]);
+  for(let i=1;i<pts.length;i++) sh.lineTo(pts[i][0],pts[i][1]); sh.closePath();
+  const g=new THREE.ShapeGeometry(sh); g.translate(0,0,z);
+  return new THREE.Mesh(g,new THREE.MeshBasicMaterial({color,transparent:true,opacity:op,side:THREE.DoubleSide,depthWrite:false}));
+}
+
+/* ---- keeper silhouette (posture): local polygon of [s (along width), y (height)] ---- */
+function silhouette(kw,kh,posture){
+  const hw=kw/2;
+  if(posture==='spread'){                               // low + wide (logs / star)
+    const Wb=kw*0.85, H=kh*0.6, hd=0.12;
+    return {poly:[[-Wb,0],[Wb,0],[hw,H],[hd,H],[hd,H+0.18],[-hd,H+0.18],[-hd,H],[-hw,H]], footMin:-Wb, footMax:Wb};
+  }
+  return {poly:[[-hw,0],[hw,0],[hw,kh],[-hw,kh]], footMin:-hw, footMax:hw};  // set (standing rectangle)
+}
+function silMesh(poly,mat){                             // thin extruded slab of the silhouette
+  const sh=new THREE.Shape(); sh.moveTo(poly[0][0],poly[0][1]);
+  for(let i=1;i<poly.length;i++) sh.lineTo(poly[i][0],poly[i][1]); sh.closePath();
+  const geo=new THREE.ExtrudeGeometry(sh,{depth:0.16,bevelEnabled:false}); geo.translate(0,0,-0.08);
+  return new THREE.Mesh(geo,mat);
+}
+function faceAngle(d){ return Math.atan2(-d.x,-d.y); }  // rotate slab so its width is perpendicular to the sightline
+function disposeChildren(gr,keep){
+  for(let i=gr.children.length-1;i>=0;i--){ const o=gr.children[i]; gr.remove(o);
+    if(o.geometry) o.geometry.dispose();
+    if(o.material && (!keep||keep.indexOf(o.material)<0)) o.material.dispose(); }
+}
+let keeperSig='';                                       // rebuild keeper mesh only when silhouette changes
+function ensureKeeperMesh(poly){
+  const sig=JSON.stringify(poly);
+  if(sig!==keeperSig){ disposeChildren(keeper,[keeperMat]); keeper.add(silMesh(poly,keeperMat)); keeperSig=sig; }
+}
+
+/* ---- heatmap: coverage % from every shot spot inside the D ---- */
+function insideD(x,z){ if(z<0) return false; const d=(Math.abs(x)<=HALF)?z:Math.hypot(Math.abs(x)-HALF,z); return d<=CIRCLE_R; }
+function heatColor(f){                                   // 0 = red, 0.5 = amber, 1 = green
+  let r,g,b;
+  if(f<0.5){ const t=f/0.5; r=0.86+(0.95-0.86)*t; g=0.25+(0.80-0.25)*t; b=0.25+(0.30-0.25)*t; }
+  else { const t=(f-0.5)/0.5; r=0.95+(0.36-0.95)*t; g=0.80+(0.85-0.80)*t; b=0.30+(0.45-0.30)*t; }
+  return [r,g,b];
+}
+function groundPct(S,Kc,sil){
+  const dir=S.clone().sub(Kc).normalize(), perp=new THREE.Vector2(-dir.y,dir.x);
+  const a=projToLine(S,Kc.clone().add(perp.clone().multiplyScalar(sil.footMax)));
+  const b=projToLine(S,Kc.clone().add(perp.clone().multiplyScalar(sil.footMin)));
+  if(a===null||b===null) return 0;
+  const covL=Math.max(-HALF,Math.min(a,b)), covR=Math.min(HALF,Math.max(a,b));
+  return Math.max(0,covR-covL)/GOAL_W*100;
+}
+function clearHeatmap(){ disposeChildren(heatGroup,[]); }
+function computeHeatmap(){
+  clearHeatmap();
+  const kw=+el('kw').value, kh=+el('kh').value, sil=silhouette(kw,kh,posture), off=+el('off').value;
+  // keep the keeper fixed at its current position (as in Free mode) rather than re-solving per shot spot
+  const Kcur = lastState ? lastState.K.clone() : (keeperMode==='free'
+    ? new THREE.Vector2(+el('kx').value,+el('kz').value)
+    : guidedKeeper(new THREE.Vector2(+el('bx').value,+el('bz').value), off, priority, kw));
+  const sbx=bxBall, sbz=bzBall, step=0.5, y=0.009, pos=[], col=[];
+  for(let x=-16;x<16;x+=step) for(let z=0.4;z<16;z+=step){
+    const cx=x+step/2, cz=z+step/2; if(!insideD(cx,cz)) continue;
+    const S=new THREE.Vector2(cx,cz);
+    let pct;
+    if(coverageMode==='face'){ bxBall=cx; bzBall=cz; const f=faceCoverage(S,Kcur,sil.poly); pct=f?f.pct:0; }
+    else pct=groundPct(S,Kcur,sil);
+    const c=heatColor(Math.max(0,Math.min(1,pct/100)));
+    const q=[[x,z],[x+step,z],[x+step,z+step],[x,z],[x+step,z+step],[x,z+step]];
+    for(const p of q){ pos.push(p[0],y,p[1]); col.push(c[0],c[1],c[2]); }
+  }
+  bxBall=sbx; bzBall=sbz;
+  if(pos.length){
+    const g=new THREE.BufferGeometry();
+    g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(pos),3));
+    g.setAttribute('color',new THREE.BufferAttribute(new Float32Array(col),3));
+    heatGroup.add(new THREE.Mesh(g,new THREE.MeshBasicMaterial({vertexColors:true,transparent:true,opacity:0.5,side:THREE.DoubleSide,depthWrite:false})));
+  }
+}
+
+/* ---- floating stats billboard ---- */
+function roundRectPath(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+function drawBillboard(d){
+  const c=bbCtx, W=bbCanvas.width, H=bbCanvas.height;
+  c.clearRect(0,0,W,H);
+  roundRectPath(c,6,6,W-12,H-12,26); c.fillStyle='rgba(14,22,36,0.92)'; c.fill();
+  c.lineWidth=2; c.strokeStyle='rgba(120,150,180,0.35)'; c.stroke();
+  c.textBaseline='top';
+  c.fillStyle='#37d6c6'; c.font='bold 24px system-ui,Arial'; c.fillText((d.metric+' covered').toUpperCase(), 30, 26);
+  c.fillStyle='#5be08a'; c.font='bold 100px system-ui,Arial'; c.fillText(Math.round(d.pct)+'%', 24, 52);
+  c.fillStyle='#8ea6b6'; c.font='20px system-ui,Arial'; c.fillText('near open', 300, 58);
+  c.fillStyle='#e9f0f5'; c.font='bold 34px system-ui,Arial'; c.fillText((d.nearGap*100).toFixed(0)+' cm', 300, 82);
+  c.fillStyle='#8ea6b6'; c.font='20px system-ui,Arial'; c.fillText('far open', 300, 128);
+  c.fillStyle='#e9f0f5'; c.font='bold 34px system-ui,Arial'; c.fillText((d.farGap*100).toFixed(0)+' cm', 300, 152);
+  // goal-mouth schematic (red = open, green = covered)
+  const sw=300, sh=sw*(GOAL_H/GOAL_W), sx=(W-sw)/2, sy=200;
+  const mapx=X=>sx+(X+HALF)/GOAL_W*sw, mapy=Y=>sy+(1-Y/GOAL_H)*sh;
+  c.fillStyle='rgba(255,107,107,0.85)'; c.fillRect(sx,sy,sw,sh);
+  c.fillStyle='rgba(91,224,138,0.92)';
+  if(d.facePoly && d.facePoly.length>=3){
+    c.beginPath(); d.facePoly.forEach((p,i)=>{ const X=mapx(p[0]),Y=mapy(p[1]); i?c.lineTo(X,Y):c.moveTo(X,Y); }); c.closePath(); c.fill();
+  } else if(d.coveredW>0){
+    c.fillRect(mapx(d.covL), sy, (d.covR-d.covL)/GOAL_W*sw, sh);
+  }
+  c.strokeStyle='#dfeef2'; c.lineWidth=3; c.strokeRect(sx,sy,sw,sh);
+  bbTex.needsUpdate=true;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Update loop for state                                              */
+/* ------------------------------------------------------------------ */
+const el = id=>document.getElementById(id);
+let placeMode='', keeperMode='bis', priority='centre', coverageMode='face', posture='set', passOn=false;
+
+function update(){
+  const bx=+el('bx').value, bz=+el('bz').value, kw=+el('kw').value;
+  const B=new THREE.Vector2(bx,bz);
+
+  // ---- keeper position ----
+  let K;
+  const uL=pL.clone().sub(B).normalize(), uR=pR.clone().sub(B).normalize();
+  const bis=uL.clone().add(uR).normalize();               // bisector direction (points toward goal)
+  if(keeperMode==='bis'){
+    K=guidedKeeper(B, +el('off').value, priority, kw);
+  }else{
+    K=new THREE.Vector2(+el('kx').value, +el('kz').value);
+  }
+
+  // ---- keeper silhouette (posture) ----
+  const kh=+el('kh').value;
+  const dir=B.clone().sub(K).normalize();
+  const perp=new THREE.Vector2(-dir.y, dir.x);
+  const sil=silhouette(kw,kh,posture);
+
+  // ---- shadow on goal line (from silhouette footprint) ----
+  const Efa=K.clone().add(perp.clone().multiplyScalar(sil.footMax));
+  const Efb=K.clone().add(perp.clone().multiplyScalar(sil.footMin));
+  let xa=projToLine(B,Efa), xb=projToLine(B,Efb);
+  let coveredW=0, covL=0, covR=0, leftGap=GOAL_W, rightGap=0;
+  if(xa!==null && xb!==null){
+    const sMin=Math.min(xa,xb), sMax=Math.max(xa,xb);
+    covL=Math.max(-HALF,sMin); covR=Math.min(HALF,sMax);
+    coveredW=Math.max(0,covR-covL);
+    if(coveredW>0){ leftGap=Math.max(0,covL-(-HALF)); rightGap=Math.max(0,HALF-covR); }
+    else { leftGap=GOAL_W; rightGap=0; }
+  }
+
+  const goalDeg=angBetween(pL.clone().sub(B), pR.clone().sub(B))*180/Math.PI;
+  const covPct=coveredW/GOAL_W*100;
+
+  // near post is on the ball's side
+  const side=Math.sign(bx)||1;
+  const nearGap=side>=0?rightGap:leftGap;
+  const farGap =side>=0?leftGap:rightGap;
+
+  // bisector bias (signed)
+  const kdir=K.clone().sub(B).normalize();
+  const cross=kdir.x*bis.y-kdir.y*bis.x;
+  const biasDeg=angBetween(kdir,bis)*180/Math.PI*(cross>=0?1:-1);
+
+  /* ---- place meshes ---- */
+  ball.position.set(bx, BALL_R, bz);
+  ensureKeeperMesh(sil.poly);
+  keeper.position.set(K.x, 0, K.y);
+  keeper.rotation.y=faceAngle(dir);
+  bxBall=bx; bzBall=bz;                                     // for goal-face projection
+
+  // goal-face (2D) coverage
+  const face=faceCoverage(B,K,sil.poly);
+  const facePct=face?face.pct:0;
+  const useFace=(coverageMode==='face');
+  const headPct=useFace?facePct:covPct;
+
+  /* ---- pass-then-shoot ---- */
+  disposeChildren(passGroup,[ghostMat]);
+  passer.visible=false;
+  let repos=null;
+  if(passOn){
+    const px=+el('px').value, pz=+el('pz').value;
+    passer.visible=true; passer.position.set(px,BALL_R,pz);
+    const Bp=new THREE.Vector2(px,pz);
+    const Kp=guidedKeeper(Bp, +el('off').value, priority, kw);   // keeper set for the pass
+    const dirp=Bp.clone().sub(Kp).normalize();
+    const ghost=silMesh(silhouette(kw,kh,'set').poly, ghostMat);
+    ghost.position.set(Kp.x,0,Kp.y); ghost.rotation.y=faceAngle(dirp);
+    passGroup.add(ghost);
+    repos=Kp.distanceTo(K);
+    passGroup.add(polyline([new THREE.Vector3(px,BALL_R,pz), new THREE.Vector3(bx,BALL_R,bz)],0x9fb3bd,true)); // pass line
+    passGroup.add(polyline([v3(Kp,0.05), v3(K,0.05)],0xffcf5c));  // reposition arrow
+  }
+
+  /* ---- rebuild overlays ---- */
+  clearViz();
+  const yb=0.02;
+  if(el('oCone').checked){
+    viz.add(tri(v3(B,yb), v3(pL,yb), v3(pR,yb), 0x37d6c6, 0.10));
+    viz.add(polyline([v3(B,yb),v3(pL,yb)],0x37d6c6));
+    viz.add(polyline([v3(B,yb),v3(pR,yb)],0x37d6c6));
+  }
+  if(el('oBis').checked){
+    const t0=-B.y/bis.y; const hit=B.clone().add(bis.clone().multiplyScalar(t0));
+    viz.add(polyline([v3(B,yb),v3(hit,yb)],0xffcf5c,true));
+  }
+  if(el('oCover').checked){
+    if(useFace){
+      // shade the goal opening: red face, green covered region on top
+      viz.add(faceMesh([[-HALF,0],[HALF,0],[HALF,GOAL_H],[-HALF,GOAL_H]], 0.0, 0xff6b6b, 0.22));
+      if(face && face.poly.length>=3) viz.add(faceMesh(face.poly, 0.05, 0x5be08a, 0.5));
+      viz.add(polyline([new THREE.Vector3(-HALF,0,0),new THREE.Vector3(HALF,0,0),
+        new THREE.Vector3(HALF,GOAL_H,0),new THREE.Vector3(-HALF,GOAL_H,0),new THREE.Vector3(-HALF,0,0)],0xdfeef2));
+    } else if(xa!==null){
+      // shadow slice ball -> keeper edges -> goal line
+      viz.add(tri(v3(B,0.015), new THREE.Vector3(xa,0.015,0), new THREE.Vector3(xb,0.015,0), 0x33424c, 0.28));
+      viz.add(polyline([v3(B,yb),new THREE.Vector3(xa,yb,0)],0x9fb3bd));
+      viz.add(polyline([v3(B,yb),new THREE.Vector3(xb,yb,0)],0x9fb3bd));
+      // goalmouth: green covered, red gaps
+      if(leftGap>0)  viz.add(seg(-HALF, coveredW>0?covL:HALF, 0xff6b6b));
+      if(coveredW>0) viz.add(seg(covL, covR, 0x5be08a));
+      if(rightGap>0) viz.add(seg(covR, HALF, 0xff6b6b));
+    }
+  }
+  if(el('oPyr').checked){
+    const apex=new THREE.Vector3(bx,BALL_R,bz);
+    const corners=[
+      new THREE.Vector3(-HALF,0,0), new THREE.Vector3(HALF,0,0),
+      new THREE.Vector3(HALF,GOAL_H,0), new THREE.Vector3(-HALF,GOAL_H,0)
+    ];
+    corners.forEach(c=>viz.add(polyline([apex,c],0x8be6dc)));
+    // outline of goal mouth
+    viz.add(polyline([corners[0],corners[1],corners[2],corners[3],corners[0]],0x8be6dc));
+  }
+
+  /* ---- HUD ---- */
+  el('bxVal').textContent=bx.toFixed(1)+' m';
+  el('bzVal').textContent=bz.toFixed(1)+' m';
+  el('kwVal').textContent=kw.toFixed(2)+' m';
+  el('offVal').textContent=(+el('off').value).toFixed(2)+' m';
+  el('kxVal').textContent=(+el('kx').value).toFixed(2)+' m';
+  el('kzVal').textContent=(+el('kz').value).toFixed(2)+' m';
+  el('pxVal').textContent=(+el('px').value).toFixed(1)+' m';
+  el('pzVal').textContent=(+el('pz').value).toFixed(1)+' m';
+
+  el('rGoal').textContent=goalDeg.toFixed(1)+'°';
+  el('rCov').textContent=headPct.toFixed(0)+'%';
+  el('rBar').style.width=Math.max(0,Math.min(100,headPct))+'%';
+  el('khVal').textContent=kh.toFixed(2)+' m';
+  el('cvNote').innerHTML = useFace
+    ? '% of the whole goal <b>face</b> (3.66 × 2.14 m) covered — keeper modelled as a wall '+kh.toFixed(2)+' m tall. Includes lifted shots.'
+    : '% of goal <b>width</b> covered against a flat shot along the ground — height isn\'t counted.';
+  el('rNear').textContent=(nearGap*100).toFixed(0)+' cm';
+  el('rFar').textContent=(farGap*100).toFixed(0)+' cm';
+  el('rBias').textContent=Math.abs(biasDeg)<0.3?'on line'
+      :(Math.abs(biasDeg).toFixed(1)+'° '+(biasDeg>0?'far':'near'));
+  el('rDist').textContent=K.distanceTo(B).toFixed(2)+' m';
+  el('rReposRow').style.display = passOn?'flex':'none';
+  if(passOn && repos!=null) el('rRepos').textContent=repos.toFixed(2)+' m';
+
+  // keep polar sliders + labels in step with the canonical cartesian values
+  { const bp=cartToPolar(bx,bz);
+    el('br').value=bp.r.toFixed(1); el('ba').value=String(Math.round(bp.th));
+    el('brVal').textContent=bp.r.toFixed(1)+' m'; el('baVal').textContent=Math.round(bp.th)+'°';
+    el('rBall').textContent=bp.r.toFixed(1)+' m @ '+Math.round(bp.th)+'°';
+    const kp=cartToPolar(+el('kx').value, +el('kz').value);
+    el('kr').value=kp.r.toFixed(1); el('ka').value=String(Math.round(kp.th));
+    el('krVal').textContent=kp.r.toFixed(1)+' m'; el('kaVal').textContent=Math.round(kp.th)+'°';
+  }
+
+  if(el('oBillboard').checked) drawBillboard({ metric: useFace?'Goal face':'Ground line', pct: headPct,
+    nearGap, farGap, facePoly:(useFace&&face)?face.poly:null, covL, covR, coveredW });
+
+  lastState={bx,bz,K,dir};
+  scheduleUrl();
+}
+let lastState=null;
+
+/* ------------------------------------------------------------------ */
+/*  Custom orbit camera (no OrbitControls in r128)                     */
+/* ------------------------------------------------------------------ */
+const cam={target:new THREE.Vector3(0,1.0,6), radius:20, theta:0, phi:1.02};
+function applyCam(){
+  const sp=Math.sin(cam.phi), cp=Math.cos(cam.phi);
+  camera.position.set(
+    cam.target.x + cam.radius*sp*Math.sin(cam.theta),
+    cam.target.y + cam.radius*cp,
+    cam.target.z + cam.radius*sp*Math.cos(cam.theta)
+  );
+  camera.lookAt(cam.target);
+}
+function setFromPositionTarget(pos,tgt){
+  cam.target.copy(tgt);
+  const off=pos.clone().sub(tgt); cam.radius=Math.max(3,off.length());
+  cam.theta=Math.atan2(off.x, off.z);
+  cam.phi=Math.acos(Math.max(-1,Math.min(1,off.y/cam.radius)));
+  cam.phi=Math.max(0.05,Math.min(Math.PI/2-0.02,cam.phi));
+}
+
+/* pointer handling: left = orbit, right/shift = pan, wheel = zoom, click(place) */
+let drag=null;
+const dom=renderer.domElement;
+dom.addEventListener('pointerdown',e=>{
+  dom.setPointerCapture(e.pointerId);
+  drag={x:e.clientX,y:e.clientY,ox:e.clientX,oy:e.clientY,
+        pan:(e.button===2||e.shiftKey),moved:0,button:e.button};
+});
+dom.addEventListener('pointermove',e=>{
+  if(!drag) return;
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+  drag.moved+=Math.abs(dx)+Math.abs(dy); drag.x=e.clientX; drag.y=e.clientY;
+  if(drag.pan){
+    const right=new THREE.Vector3().setFromMatrixColumn(camera.matrix,0);
+    const up=new THREE.Vector3().setFromMatrixColumn(camera.matrix,1);
+    const k=cam.radius*0.0016;
+    cam.target.addScaledVector(right,-dx*k); cam.target.addScaledVector(up, dy*k);
+  }else{
+    cam.theta-=dx*0.005; cam.phi-=dy*0.005;
+    cam.phi=Math.max(0.05,Math.min(Math.PI/2-0.02,cam.phi));
+  }
+});
+dom.addEventListener('pointerup',e=>{
+  if(drag && placeMode && drag.button===0 && drag.moved<5) tryPlace(e);
+  drag=null;
+});
+dom.addEventListener('wheel',e=>{
+  e.preventDefault();
+  cam.radius*=(1+Math.sign(e.deltaY)*0.08);
+  cam.radius=Math.max(4,Math.min(70,cam.radius));
+},{passive:false});
+dom.addEventListener('contextmenu',e=>e.preventDefault());
+
+/* touch pinch zoom */
+let pinch=null;
+dom.addEventListener('touchmove',e=>{
+  if(e.touches.length===2){
+    const dx=e.touches[0].clientX-e.touches[1].clientX;
+    const dy=e.touches[0].clientY-e.touches[1].clientY;
+    const dist=Math.hypot(dx,dy);
+    if(pinch) { cam.radius*=pinch/dist; cam.radius=Math.max(4,Math.min(70,cam.radius)); }
+    pinch=dist; e.preventDefault();
+  }
+},{passive:false});
+dom.addEventListener('touchend',()=>pinch=null);
+
+/* click-to-place ball on the ground */
+const ray=new THREE.Raycaster(), ndc=new THREE.Vector2();
+const ground=new THREE.Plane(new THREE.Vector3(0,1,0),0);
+function tryPlace(e){
+  const r=dom.getBoundingClientRect();
+  ndc.set(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
+  ray.setFromCamera(ndc,camera);
+  const hit=new THREE.Vector3();
+  if(ray.ray.intersectPlane(ground,hit)){
+    const cx=Math.max(-14,Math.min(14,hit.x));
+    if(placeMode==='ball'){ el('bx').value=cx.toFixed(1); el('bz').value=Math.max(0.6,Math.min(20,hit.z)).toFixed(1); }
+    else if(placeMode==='passer'){ el('px').value=cx.toFixed(1); el('pz').value=Math.max(0.6,Math.min(24,hit.z)).toFixed(1); }
+    else if(placeMode==='keeper'){ if(keeperMode!=='free') setMode('free'); el('kx').value=Math.max(-8,Math.min(8,hit.x)).toFixed(2); el('kz').value=Math.max(0.2,Math.min(12,hit.z)).toFixed(2); }
+    update();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  View presets                                                       */
+/* ------------------------------------------------------------------ */
+function setView(v){
+  if(v==='reset'){ cam.target.set(0,1.0,6); cam.radius=20; cam.theta=0; cam.phi=1.02; }
+  else if(v==='plan'){ cam.target.set(0,0,7.5); cam.radius=27; cam.theta=0; cam.phi=0.09; }
+  else if(v==='behind'){ cam.target.set(0,1.0,3); cam.radius=13; cam.theta=Math.PI; cam.phi=1.0; }
+  else if(v==='atk' && lastState){
+    setFromPositionTarget(new THREE.Vector3(lastState.bx,0.55,lastState.bz), new THREE.Vector3(0,0.7,0));
+  }
+  else if(v==='gk' && lastState){
+    const d=lastState.dir; // toward ball (across,depth)
+    const pos=new THREE.Vector3(lastState.K.x + d.x*0.45, 1.62, lastState.K.y + d.y*0.45);
+    setFromPositionTarget(pos, new THREE.Vector3(lastState.bx,0.3,lastState.bz));
+  }
+}
+document.querySelectorAll('#views button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('#views button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); setView(b.dataset.v);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  UI wiring                                                          */
+/* ------------------------------------------------------------------ */
+['bx','bz','off','kx','kz','kw'].forEach(id=>el(id).addEventListener('input',update));
+['oCone','oBis','oCover','oPyr','oGrid','oBillboard'].forEach(id=>el(id).addEventListener('change',()=>{
+  grid.visible=el('oGrid').checked; billboard.visible=el('oBillboard').checked; update();
+}));
+
+function setPlace(mode){
+  placeMode=(placeMode===mode)?'':mode;
+  el('placeBtn').classList.toggle('on',placeMode==='ball');
+  el('placeBtn').textContent='Click pitch to place ball: '+(placeMode==='ball'?'on':'off');
+  el('passPlaceBtn').classList.toggle('on',placeMode==='passer');
+  el('passPlaceBtn').textContent='Click pitch to place passer: '+(placeMode==='passer'?'on':'off');
+  el('keeperPlaceBtn').classList.toggle('on',placeMode==='keeper');
+  el('keeperPlaceBtn').textContent='Click pitch to place keeper: '+(placeMode==='keeper'?'on':'off');
+}
+el('placeBtn').addEventListener('click',()=>setPlace('ball'));
+el('passPlaceBtn').addEventListener('click',()=>setPlace('passer'));
+el('keeperPlaceBtn').addEventListener('click',()=>setPlace('keeper'));
+function setMode(m){
+  if(m==='free' && lastState){                            // adopt the current keeper spot so it doesn't jump
+    el('kx').value=Math.max(-8,Math.min(8,lastState.K.x)).toFixed(2);
+    el('kz').value=Math.max(0.2,Math.min(12,lastState.K.y)).toFixed(2);
+  }
+  keeperMode=m;
+  el('modeBis').classList.toggle('on',m==='bis');
+  el('modeFree').classList.toggle('on',m==='free');
+  el('bisCtl').style.display=m==='bis'?'block':'none';
+  el('freeCtl').style.display=m==='free'?'block':'none';
+  update();
+}
+el('modeBis').addEventListener('click',()=>setMode('bis'));
+el('modeFree').addEventListener('click',()=>setMode('free'));
+
+function setPriority(p){
+  priority=p;
+  document.querySelectorAll('#prioSeg button').forEach(b=>b.classList.toggle('on',b.dataset.p===p));
+  update();
+}
+document.querySelectorAll('#prioSeg button').forEach(b=>b.addEventListener('click',()=>setPriority(b.dataset.p)));
+
+function setCoverageMode(m){
+  coverageMode=m;
+  el('covGround').classList.toggle('on',m==='ground');
+  el('covFace').classList.toggle('on',m==='face');
+  update();
+}
+el('covGround').addEventListener('click',()=>setCoverageMode('ground'));
+el('covFace').addEventListener('click',()=>setCoverageMode('face'));
+el('kh').addEventListener('input',update);
+
+function setPosture(p){
+  posture=p;
+  document.querySelectorAll('#postSeg button').forEach(b=>b.classList.toggle('on',b.dataset.po===p));
+  update();
+}
+document.querySelectorAll('#postSeg button').forEach(b=>b.addEventListener('click',()=>setPosture(b.dataset.po)));
+
+function setPass(on){
+  passOn=on;
+  el('passBtn').textContent='Enable pass move: '+(on?'on':'off');
+  el('passBtn').classList.toggle('on',on);
+  el('passCtl').style.display=on?'block':'none';
+  update();
+}
+el('passBtn').addEventListener('click',()=>setPass(!passOn));
+['px','pz'].forEach(id=>el(id).addEventListener('input',update));
+
+/* ---- scenario presets ---- */
+const PRESETS={
+  topD:   {bx:0,  bz:14.6, km:'bis', pr:'centre', off:2.0, pass:0},
+  tight:  {bx:11, bz:1.6,  km:'bis', pr:'near',   off:1.0, pass:0},
+  stroke: {bx:0,  bz:6.4,  km:'bis', pr:'centre', off:0.0, pass:0},
+  pcflick:{bx:0,  bz:14.6, km:'bis', pr:'centre', off:1.0, pass:1, px:9,  pz:0.3},
+  switch: {bx:-6, bz:4.5,  km:'bis', pr:'near',   off:1.5, pass:1, px:10, pz:4.5},
+  oneVone:{bx:0,  bz:8.0,  km:'bis', pr:'centre', off:3.5, pass:0}
+};
+function applyPreset(k){
+  const p=PRESETS[k]; if(!p) return;
+  el('bx').value=p.bx; el('bz').value=p.bz; el('off').value=p.off;
+  if('px'in p) el('px').value=p.px; if('pz'in p) el('pz').value=p.pz;
+  keeperMode=p.km; priority=p.pr; passOn=!!p.pass;
+  setMode(keeperMode); setPriority(priority); setPass(passOn);
+  update();
+}
+document.querySelectorAll('#scenSeg button').forEach(b=>b.addEventListener('click',()=>applyPreset(b.dataset.s)));
+
+/* ---- heatmap ---- */
+el('heatCompute').addEventListener('click',computeHeatmap);
+el('heatClear').addEventListener('click',clearHeatmap);
+
+
+/* configurable ceiling for how far off the line the keeper may commit */
+function applyOffMax(){
+  const m=+el('offMax').value;
+  el('off').max=m;
+  if(+el('off').value>m) el('off').value=m;
+  el('offMaxVal').textContent=m.toFixed(1)+' m';
+  update();
+}
+el('offMax').addEventListener('input',applyOffMax);
+el('off').max=+el('offMax').value;
+el('offMaxVal').textContent=(+el('offMax').value).toFixed(1)+' m';
+
+/* ---- polar / cartesian coordinate input ---------------------------- */
+let coordMode='cart';
+const cartToPolar=(x,z)=>({r:Math.hypot(x,z), th:Math.atan2(x,z)*180/Math.PI});
+const polarToCart=(r,thDeg)=>{const t=thDeg*Math.PI/180; return {x:r*Math.sin(t), z:r*Math.cos(t)};};
+function setCoord(m){
+  coordMode=m;
+  el('coordCart').classList.toggle('on',m==='cart');
+  el('coordPolar').classList.toggle('on',m==='polar');
+  el('ballCart').style.display  = m==='cart' ?'block':'none';
+  el('ballPolar').style.display = m==='polar'?'block':'none';
+  el('kFreeCart').style.display = m==='cart' ?'block':'none';
+  el('kFreePolar').style.display= m==='polar'?'block':'none';
+}
+function ballFromPolar(){
+  const c=polarToCart(+el('br').value, +el('ba').value);
+  el('bx').value=Math.max(-14,Math.min(14,c.x)).toFixed(1);
+  el('bz').value=Math.max(0.6,Math.min(20,c.z)).toFixed(1);
+  update();
+}
+function keeperFromPolar(){
+  const c=polarToCart(+el('kr').value, +el('ka').value);
+  el('kx').value=Math.max(-8,Math.min(8,c.x)).toFixed(2);
+  el('kz').value=Math.max(0.2,Math.min(12,c.z)).toFixed(2);
+  update();
+}
+el('coordCart').addEventListener('click',()=>setCoord('cart'));
+el('coordPolar').addEventListener('click',()=>setCoord('polar'));
+['ba','br'].forEach(id=>el(id).addEventListener('input',ballFromPolar));
+['ka','kr'].forEach(id=>el(id).addEventListener('input',keeperFromPolar));
+
+/* ---- shareable URL state ---- */
+function serialise(){
+  const ov=(el('oCone').checked?1:0)|(el('oBis').checked?2:0)|(el('oCover').checked?4:0)|(el('oPyr').checked?8:0)|(el('oGrid').checked?16:0)|(el('oBillboard').checked?32:0);
+  return { bx:+el('bx').value, bz:+el('bz').value, km:keeperMode, pr:priority, off:+el('off').value,
+    kx:+el('kx').value, kz:+el('kz').value, kw:+el('kw').value, kh:+el('kh').value, om:+el('offMax').value,
+    cov:coverageMode, po:posture, cm:coordMode, ps:passOn?1:0, px:+el('px').value, pz:+el('pz').value, ov };
+}
+function writeUrl(){
+  const p=serialise(), parts=[];
+  for(const k in p) parts.push(k+'='+encodeURIComponent(p[k]));
+  try { history.replaceState(null,'','#'+parts.join('&')); }   // blocked in sandboxed about:srcdoc; harmless to skip
+  catch(e){ /* history not writable in this context (e.g. artifact preview) */ }
+}
+let urlT=null; function scheduleUrl(){ clearTimeout(urlT); urlT=setTimeout(writeUrl,250); }
+function readUrl(){
+  if(!location.hash||location.hash.length<2) return;
+  const p={}; location.hash.slice(1).split('&').forEach(kv=>{const i=kv.indexOf('='); if(i>0) p[kv.slice(0,i)]=decodeURIComponent(kv.slice(i+1));});
+  const setv=(id,v)=>{ if(v!==undefined&&v!=='') el(id).value=v; };
+  setv('bx',p.bx); setv('bz',p.bz); setv('off',p.off); setv('kx',p.kx); setv('kz',p.kz);
+  setv('kw',p.kw); setv('kh',p.kh); setv('offMax',p.om); setv('px',p.px); setv('pz',p.pz);
+  if(p.om){ el('off').max=+p.om; el('offMaxVal').textContent=(+p.om).toFixed(1)+' m'; }
+  if(p.cm) coordMode=p.cm;
+  if(p.km) keeperMode=p.km;
+  if(p.pr) priority=p.pr;
+  if(p.cov) coverageMode=p.cov;
+  if(p.po) posture=(p.po==='spread'?'spread':'set');
+  if(p.ps!==undefined) passOn=(p.ps==='1');
+  if(p.ov!==undefined){ const ov=+p.ov;
+    el('oCone').checked=!!(ov&1); el('oBis').checked=!!(ov&2); el('oCover').checked=!!(ov&4);
+    el('oPyr').checked=!!(ov&8); el('oGrid').checked=!!(ov&16); el('oBillboard').checked=!!(ov&32); }
+}
+el('copyBtn').addEventListener('click',()=>{
+  writeUrl();
+  const b=el('copyBtn'), keep='Copy link to this position';
+  const done=()=>{ b.textContent='Link copied ✓'; b.classList.add('on');
+    clearTimeout(b._t); b._t=setTimeout(()=>{b.textContent=keep; b.classList.remove('on');},1600); };
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(done,done);
+  else done();
+});
+function initFromUrl(){
+  readUrl();
+  setCoord(coordMode);
+  setMode(keeperMode);
+  setPriority(priority);
+  setCoverageMode(coverageMode);
+  setPosture(posture);
+  setPass(passOn);
+  grid.visible=el('oGrid').checked;
+  billboard.visible=el('oBillboard').checked;
+}
+
+/* ---- collapsible control panel (handy on mobile) ---- */
+const controlsPanel=el('controls');
+/* on a narrow screen, shift the rendered view right so the goal clears the open panel */
+function applyViewShift(){
+  const open = window.innerWidth<560 && !controlsPanel.classList.contains('collapsed');
+  if(open){
+    const panelRight=controlsPanel.getBoundingClientRect().right;
+    const f=Math.min(0.42, panelRight/(2*window.innerWidth));
+    camera.setViewOffset(window.innerWidth, window.innerHeight, -f*window.innerWidth, 0, window.innerWidth, window.innerHeight);
+  } else {
+    camera.clearViewOffset();
+  }
+}
+function setCollapsed(c){
+  controlsPanel.classList.toggle('collapsed',c);
+  const b=el('collapseBtn');
+  b.setAttribute('aria-expanded',String(!c));
+  b.title=c?'Expand panel':'Collapse panel';
+  applyViewShift();
+}
+el('ctlHeader').addEventListener('click',()=>setCollapsed(!controlsPanel.classList.contains('collapsed')));
+setCollapsed(false);
+
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+  applyViewShift();
+});
+
+/* ------------------------------------------------------------------ */
+/*  Run                                                                */
+/* ------------------------------------------------------------------ */
+initFromUrl();
+update();
+
+/* keep the billboard a constant on-screen size, and hide the side readout while the goal is in view */
+let readoutHidden=null;
+function goalOnScreen(){ const p=billboard.position.clone().project(camera); return p.z<1 && p.x>-1.05 && p.x<1.05 && p.y>-1.05 && p.y<1.05; }
+function refreshReadout(){
+  const hide = el('oBillboard').checked && goalOnScreen();
+  if(hide!==readoutHidden){ el('readout').style.display = hide?'none':''; readoutHidden=hide; }
+}
+const BB_ANCHOR=new THREE.Vector3(0, GOAL_H+0.3, 0);   // bottom of billboard sits here, above the crossbar
+(function loop(){
+  applyCam();
+  if(billboard.visible){
+    const d=camera.position.distanceTo(BB_ANCHOR), h=0.13*d;
+    billboard.scale.set(h*BB_ASPECT, h, 1);
+    billboard.position.set(0, BB_ANCHOR.y + h/2, 0);
+  }
+  refreshReadout();
+  renderer.render(scene,camera);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
