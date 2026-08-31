@@ -400,8 +400,12 @@ const heatGroup = new THREE.Group(); scene.add(heatGroup);
 const BB_W=480, BB_H=420, BB_ASPECT=BB_W/BB_H;
 const bbCanvas=document.createElement('canvas'); bbCanvas.width=BB_W; bbCanvas.height=BB_H;
 const bbCtx=bbCanvas.getContext('2d');
-const bbTex=new THREE.CanvasTexture(bbCanvas);
-bbTex.minFilter=THREE.LinearFilter; bbTex.magFilter=THREE.LinearFilter; bbTex.generateMipmaps=false;
+function makeBillboardTexture(){
+  const t=new THREE.CanvasTexture(bbCanvas);
+  t.minFilter=THREE.LinearFilter; t.magFilter=THREE.LinearFilter; t.generateMipmaps=false;
+  return t;
+}
+let bbTex=makeBillboardTexture();
 
 /* Fraction of the viewport height the panel fills. A phone is held close and
    has no room to spare, so it keeps the original size; a desktop window has
@@ -413,19 +417,29 @@ function bbHeightFactor(){
   return 0.13+(0.20-0.13)*(w-560)/640;
 }
 /* Match the canvas to the sprite's on-screen device pixels, so the texture is
-   sampled at about 1:1 rather than minified. Resized only when it has drifted
-   enough to matter -- reallocating the canvas on every frame would be worse
-   than the aliasing it fixes. */
+   sampled at about 1:1 rather than minified. */
 function sizeBillboardCanvas(){
+  // A viewport that has not been laid out yet reports 0. Sizing off that would
+  // rebuild the texture at the floor, then rebuild it again a frame later.
+  if(!window.innerHeight) return;
   const px=Math.min(devicePixelRatio||1,2);
   const onScreen=bbHeightFactor()/(2*Math.tan(camera.fov*Math.PI/360));   // sprite height as a fraction of the viewport
   // The sprite holds a constant angular size, so its on-screen size does not
   // change with zoom and 1:1 stays 1:1 -- no need to supersample for motion.
-  // The floor only guards a degenerate viewport (a hidden pane reports 0).
-  const want=Math.round(Math.max(128,Math.min(1024,onScreen*window.innerHeight*px)));
-  if(Math.abs(want-bbCanvas.height)/bbCanvas.height>0.08){
-    bbCanvas.height=want; bbCanvas.width=Math.round(want*BB_ASPECT);
-  }
+  // Quantised to a multiple of 8 so the canvas only ever takes a handful of
+  // distinct sizes, and the floor keeps the text strokes from going too thin.
+  const want=Math.max(192,Math.min(1024,Math.round(onScreen*window.innerHeight*px/8)*8));
+  if(want===bbCanvas.height) return;
+  bbCanvas.height=want; bbCanvas.width=Math.round(want*BB_ASPECT);
+  /* Rebuild the texture rather than leaving three to re-upload one whose canvas
+     changed size underneath it. Mutating a live CanvasTexture's dimensions is
+     the one device-dependent thing here: it renders fine on desktop but came
+     back vertically stretched, with streaked and missing text, on an Android
+     phone. A fresh texture forces a clean allocation on every driver. */
+  const old=bbTex;
+  bbTex=makeBillboardTexture();
+  billboard.material.map=bbTex; billboard.material.needsUpdate=true;
+  old.dispose();
 }
 const billboard=new THREE.Sprite(new THREE.SpriteMaterial({map:bbTex, transparent:true, depthTest:true, depthWrite:false}));
 billboard.position.set(0,3.2,0); scene.add(billboard);
