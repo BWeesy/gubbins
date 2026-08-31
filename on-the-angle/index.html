@@ -20,7 +20,11 @@
     position:fixed;background:var(--panel);border:1px solid var(--edge);border-radius:12px;
     backdrop-filter:blur(9px);-webkit-backdrop-filter:blur(9px);box-shadow:0 8px 30px rgba(0,0,0,.35);
   }
-  #controls{top:12px;left:12px;width:266px;max-height:calc(100vh - 24px);overflow:auto;padding:12px 13px}
+  /* dvh tracks a phone's retracting toolbar; vh is the large viewport, which
+     leaves the foot of the panel below the fold. JS narrows this further when
+     the view-preset bar would sit on top of the panel. */
+  #controls{top:12px;left:12px;width:266px;max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);
+            overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:12px 13px}
   #ctlHeader{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none}
   #ctlHeader h1{margin:0}
   #collapseBtn{padding:2px 9px;font-size:14px;line-height:1;border-radius:7px}
@@ -407,10 +411,14 @@ function makeBillboardTexture(){
 }
 let bbTex=makeBillboardTexture();
 
-/* Fraction of the viewport height the panel fills. A phone is held close and
-   has no room to spare, so it keeps the original size; a desktop window has
-   both the room and the pixels for a larger, more readable panel. */
-function bbHeightFactor(){
+/* How tall the panel is, as a fraction of the viewport. layoutBillboard() sets
+   it; the render loop and the canvas sizing read it. */
+let bbHeightF=0.13;
+function bbHeightFactor(){ return bbHeightF; }
+/* What it would like to be, before the controls are taken into account. A phone
+   is held close and has no room to spare, so it keeps the original size; a
+   desktop window has both the room and the pixels for a larger panel. */
+function bbDesiredFactor(){
   const w=window.innerWidth;
   if(w<=560) return 0.13;
   if(w>=1200) return 0.20;
@@ -427,8 +435,10 @@ function sizeBillboardCanvas(){
   // The sprite holds a constant angular size, so its on-screen size does not
   // change with zoom and 1:1 stays 1:1 -- no need to supersample for motion.
   // Quantised to a multiple of 8 so the canvas only ever takes a handful of
-  // distinct sizes, and the floor keeps the text strokes from going too thin.
-  const want=Math.max(192,Math.min(1024,Math.round(onScreen*window.innerHeight*px/8)*8));
+  // distinct sizes. The floor is deliberately low: on a short viewport (a phone
+  // in landscape) the sprite is only ~50px tall, and a larger floor would put
+  // the texture back into minification -- the aliasing this all exists to fix.
+  const want=Math.max(64,Math.min(1024,Math.round(onScreen*window.innerHeight*px/8)*8));
   if(want===bbCanvas.height) return;
   bbCanvas.height=want; bbCanvas.width=Math.round(want*BB_ASPECT);
   /* Rebuild the texture rather than leaving three to re-upload one whose canvas
@@ -1113,7 +1123,14 @@ function readUrl(){
   const setv=(id,v)=>{ if(v!==undefined&&v!=='') el(id).value=v; };
   setv('bx',p.bx); setv('bz',p.bz); setv('off',p.off); setv('kx',p.kx); setv('kz',p.kz);
   setv('kw',p.kw); setv('kh',p.kh); setv('offMax',p.om); setv('px',p.px); setv('pz',p.pz);
-  if(p.om){ el('off').max=+p.om; el('offMaxVal').textContent=(+p.om).toFixed(1)+' m'; }
+  // Read the ceiling back off the slider, which has already clamped the URL
+  // value to its own min/max. Using the raw field let "#om=abc" through as
+  // max="NaN", and "#om=-5" as a max below the slider's own min.
+  if(p.om!==undefined){
+    const m=+el('offMax').value;
+    el('off').max=m; if(+el('off').value>m) el('off').value=m;
+    el('offMaxVal').textContent=m.toFixed(1)+' m';
+  }
   if(p.cm) coordMode=p.cm;
   if(p.km) keeperMode=p.km;
   if(p.pr) priority=p.pr;
@@ -1155,31 +1172,75 @@ function initFromUrl(){
 }
 
 /* ---- collapsible control panel (handy on mobile) ---- */
-const controlsPanel=el('controls');
-/* on a narrow screen, shift the rendered view right so the goal clears the open panel */
+const controlsPanel=el('controls'), viewsBar=document.getElementById('views');
+/* Fit the stats panel into whatever horizontal space the controls leave, and
+   shift the rendered view right by just enough to clear them.
+
+   This used to key off a fixed 560px breakpoint, which left a band where the
+   controls still covered the panel: crossing 560px widens them from 216px to
+   266px (see the media query) at the same moment the shift switches off, so
+   between roughly 560 and 760px the panel sat underneath them. Measuring the
+   overlap instead means there is no breakpoint to fall between. */
 function applyViewShift(){
-  const open = window.innerWidth<560 && !controlsPanel.classList.contains('collapsed');
-  if(open){
-    const panelRight=controlsPanel.getBoundingClientRect().right;
-    const f=Math.min(0.42, panelRight/(2*window.innerWidth));
-    camera.setViewOffset(window.innerWidth, window.innerHeight, -f*window.innerWidth, 0, window.innerWidth, window.innerHeight);
-  } else {
-    camera.clearViewOffset();
-  }
+  const vw=window.innerWidth, vh=window.innerHeight;
+  if(!vw||!vh) return;
+  const M=10;                                       // breathing room at each edge
+  const blocked=controlsPanel.classList.contains('collapsed') ? 0 : controlsPanel.getBoundingClientRect().right;
+  const free=Math.max(60, vw-blocked-2*M);
+  // On-screen width of the panel per unit of height factor.
+  const perFactor=vh*BB_ASPECT/(2*Math.tan(camera.fov*Math.PI/360));
+  // Shrink rather than let it run under the controls or off the right edge.
+  // Collapsing the controls frees the space again and it returns to full size.
+  // The 0.92 is slack: the sprite is sized off its anchor's distance but drawn
+  // at its centre's, so it lands a few pixels wider than this solves for.
+  bbHeightF=Math.min(bbDesiredFactor(), free*0.92/perFactor);
+  const halfW=bbHeightF*perFactor/2;
+  // Only shift by what is actually needed, so a wide window -- where nothing
+  // overlaps -- keeps the pitch centred as before.
+  const need=(blocked+M)-(vw/2-halfW);
+  const room=vw/2-halfW-M;                          // before the far edge would clip it
+  const shift=Math.max(0,Math.min(need,room));
+  if(shift>0.5) camera.setViewOffset(vw,vh,-shift,0,vw,vh);
+  else camera.clearViewOffset();
+}
+/* The view-preset bar is fixed to the bottom of the screen, and on a narrow
+   one it wraps to three rows and spreads across the controls. Anything that
+   scrolled underneath it -- the Share button and the support link live at the
+   very bottom of the panel -- was not just hidden but untappable, since the
+   bar sits on top and swallows the tap. Cap the panel so it ends above the
+   bar whenever the two would overlap. */
+function fitControlsToViewport(){
+  // visualViewport is the actually-visible area on a phone; innerHeight still
+  // counts the strip behind a retracting toolbar.
+  const vh=(window.visualViewport && window.visualViewport.height) || window.innerHeight;
+  if(!vh) return;
+  controlsPanel.style.maxHeight='';
+  const cr=controlsPanel.getBoundingClientRect(), vr=viewsBar.getBoundingClientRect();
+  const clash = vr.left < cr.right && vr.right > cr.left && vr.height > 0;
+  const reserve = clash ? Math.max(0, vh - vr.top + 8) : 0;
+  controlsPanel.style.maxHeight = Math.max(120, vh - 24 - reserve) + 'px';
 }
 function setCollapsed(c){
   controlsPanel.classList.toggle('collapsed',c);
   const b=el('collapseBtn');
   b.setAttribute('aria-expanded',String(!c));
   b.title=c?'Expand panel':'Collapse panel';
+  fitControlsToViewport();
   applyViewShift();
+  // Collapsing frees horizontal space, so the panel's size and its texture
+  // resolution both change -- redraw rather than scale a stale texture up.
+  if(lastBB) drawBillboard(lastBB);
 }
 el('ctlHeader').addEventListener('click',()=>setCollapsed(!controlsPanel.classList.contains('collapsed')));
+/* A phone's toolbar sliding away resizes the visual viewport without firing a
+   window resize, so the panel has to be re-fitted on that too. */
+if(window.visualViewport) window.visualViewport.addEventListener('resize',fitControlsToViewport);
 setCollapsed(false);
 
 addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth,innerHeight);
+  fitControlsToViewport();
   applyViewShift();
   // Both the panel's size and its texture resolution follow the viewport, so a
   // resize needs a redraw. Reuses the last payload rather than recomputing the
