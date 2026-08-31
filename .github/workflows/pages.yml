@@ -1,0 +1,56 @@
+name: pages
+
+# Publishes the repo's web things to GitHub Pages. Pages is configured in the
+# repo settings with source "GitHub Actions", so this workflow is the only
+# thing that deploys -- there is no gh-pages branch to keep in sync.
+#
+# The site root is a landing page (.github/pages/index.html) and each project
+# is served from its own subpath, so a second site can be added later without
+# moving the first one's URL. Adding a project takes two edits: a copy line in
+# "Assemble site" below, and a card on the landing page.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'on-the-angle/**'
+      - '.github/pages/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  # deploy-pages authenticates to the Pages API with an OIDC token, not a PAT.
+  id-token: write
+
+# A queued deploy supersedes an older one, but never cancels a run that is
+# already mid-deploy: Pages would be left half-updated.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp .github/pages/index.html _site/
+          cp -R on-the-angle _site/on-the-angle
+          # READMEs are for people reading the repo, not visitors to the site.
+          find _site -name 'README.md' -delete
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
