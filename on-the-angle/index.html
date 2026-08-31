@@ -90,7 +90,12 @@
   .cvNote{font-size:10px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px solid var(--edge);line-height:1.4}
   #readoutDetail{margin-top:10px;padding-top:8px;border-top:1px solid var(--edge)}
   @media (max-width:560px){
-    #controls{width:216px} #hint{display:none}
+    /* 172px, with the labels shortened to suit. Measured floor is 164 (the
+       pass-move rows go first, then the Near/Mid/Far row at ~163 and the
+       scenario grid at ~152, which would need restacking rather than words).
+       The 8px is slack: these are Segoe UI metrics, wider than the Roboto and
+       SF this mostly renders in. */
+    #controls{width:172px} #hint{display:none}
     #readout{width:154px} #readoutDetail{display:none} .cvPct{font-size:34px}
   }
 </style>
@@ -119,21 +124,21 @@
     <div class="glabel">Scenarios</div>
     <div class="seg wrap" id="scenSeg">
       <button data-s="topD">Top of D</button>
-      <button data-s="tight">Tight angle</button>
+      <button data-s="tight">Tight</button>
       <button data-s="stroke">Stroke</button>
       <button data-s="pcflick">PC flick</button>
-      <button data-s="switch">Switch play</button>
+      <button data-s="switch">Switch</button>
       <button data-s="oneVone">1v1</button>
     </div>
   </div>
 
   <div class="group">
     <div class="glabel">Shot (ball)</div>
-    <button id="placeBtn" style="width:100%;margin-bottom:8px">Click pitch to place ball: off</button>
+    <button id="placeBtn" style="width:100%;margin-bottom:8px">Place ball: off</button>
     <div id="ballCart">
       <div class="row"><label>Across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="bxVal"></span></div>
       <input class="slider" id="bx" type="range" min="-14" max="14" step="0.1" value="4.5">
-      <div class="row"><label>From backline &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="bzVal"></span></div>
+      <div class="row"><label>Depth &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="bzVal"></span></div>
       <input class="slider" id="bz" type="range" min="0.6" max="20" step="0.1" value="11">
     </div>
     <div id="ballPolar" style="display:none">
@@ -155,7 +160,7 @@
       <div class="row" style="margin-bottom:5px"><label style="font-size:11px;color:var(--muted)">Cover corner</label></div>
       <div class="seg" id="prioSeg" style="margin-bottom:9px">
         <button data-p="near">Near</button>
-        <button data-p="centre" class="on">Centre</button>
+        <button data-p="centre" class="on">Mid</button>
         <button data-p="far">Far</button>
       </div>
       <div class="row"><label>Off the line</label><span class="val" id="offVal"></span></div>
@@ -163,11 +168,11 @@
     </div>
 
     <div id="freeCtl" style="display:none">
-      <button id="keeperPlaceBtn" style="width:100%;margin-bottom:8px">Click pitch to place keeper: off</button>
+      <button id="keeperPlaceBtn" style="width:100%;margin-bottom:8px">Place keeper: off</button>
       <div id="kFreeCart">
         <div class="row"><label>Across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="kxVal"></span></div>
         <input class="slider" id="kx" type="range" min="-8" max="8" step="0.05" value="0">
-        <div class="row"><label>From backline &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="kzVal"></span></div>
+        <div class="row"><label>Depth &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="kzVal"></span></div>
         <input class="slider" id="kz" type="range" min="0.2" max="12" step="0.05" value="2">
       </div>
       <div id="kFreePolar" style="display:none">
@@ -180,15 +185,15 @@
 
     <div class="row"><label>Blocking width</label><span class="val" id="kwVal"></span></div>
     <input class="slider" id="kw" type="range" min="0.4" max="1.6" step="0.05" value="0.9">
-    <div class="row"><label>Max off the line</label><span class="val" id="offMaxVal"></span></div>
+    <div class="row"><label>Max off line</label><span class="val" id="offMaxVal"></span></div>
     <input class="slider" id="offMax" type="range" min="1" max="14" step="0.1" value="6.4">
   </div>
 
   <div class="group">
     <div class="glabel">Coverage metric</div>
     <div class="seg" style="margin-bottom:9px">
-      <button id="covGround">Ground line</button>
-      <button id="covFace" class="on">Goal face</button>
+      <button id="covGround">Ground</button>
+      <button id="covFace" class="on">Face</button>
     </div>
     <div class="row"><label>Keeper height</label><span class="val" id="khVal"></span></div>
     <input class="slider" id="kh" type="range" min="1.2" max="2.4" step="0.05" value="1.8">
@@ -201,12 +206,12 @@
 
   <div class="group">
     <div class="glabel">Pass-then-shoot</div>
-    <button id="passBtn" style="width:100%;margin-bottom:8px">Enable pass move: off</button>
+    <button id="passBtn" style="width:100%;margin-bottom:8px">Pass move: off</button>
     <div id="passCtl" style="display:none">
-      <button id="passPlaceBtn" style="width:100%;margin-bottom:8px">Click pitch to place passer: off</button>
-      <div class="row"><label>Passer across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="pxVal"></span></div>
+      <button id="passPlaceBtn" style="width:100%;margin-bottom:8px">Place passer: off</button>
+      <div class="row"><label>Across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="pxVal"></span></div>
       <input class="slider" id="px" type="range" min="-14" max="14" step="0.1" value="-8">
-      <div class="row"><label>Passer from line &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="pzVal"></span></div>
+      <div class="row"><label>Depth &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="pzVal"></span></div>
       <input class="slider" id="pz" type="range" min="0.6" max="24" step="0.1" value="6">
       <p class="sub" style="margin:6px 0 0">Blue = passer. Ghost keeper = set for the pass; amber arrow = the move needed to cover the shot.</p>
     </div>
@@ -214,12 +219,12 @@
 
   <div class="group">
     <div class="glabel">Overlays</div>
-    <label class="chk"><input type="checkbox" id="oCone" checked> Shot cone (ball → posts)</label>
-    <label class="chk"><input type="checkbox" id="oBis" checked> Centre line (bisector)</label>
-    <label class="chk"><input type="checkbox" id="oCover" checked> Coverage &amp; gaps at goal</label>
-    <label class="chk"><input type="checkbox" id="oPyr"> 3D shot cone (to corners)</label>
+    <label class="chk"><input type="checkbox" id="oCone" checked> Shot cone</label>
+    <label class="chk"><input type="checkbox" id="oBis" checked> Bisector</label>
+    <label class="chk"><input type="checkbox" id="oCover" checked> Coverage &amp; gaps</label>
+    <label class="chk"><input type="checkbox" id="oPyr"> 3D cone</label>
     <label class="chk"><input type="checkbox" id="oGrid" checked> 1 m grid</label>
-    <label class="chk"><input type="checkbox" id="oBillboard" checked> Stats billboard (over goal)</label>
+    <label class="chk"><input type="checkbox" id="oBillboard" checked> Stats billboard</label>
   </div>
 
   <div class="group">
@@ -233,7 +238,7 @@
 
   <div class="group">
     <div class="glabel">Share</div>
-    <button id="copyBtn" style="width:100%">Copy link to this position</button>
+    <button id="copyBtn" style="width:100%">Copy link</button>
     <a href="https://ko-fi.com/bweesy" target="_blank" rel="noopener" id="supportLink">Free for keepers everywhere — if it helped, ☕ buy me a coffee</a>
   </div>
   </div>
@@ -993,11 +998,11 @@ document.querySelectorAll('#views button').forEach(b=>{
 function setPlace(mode){
   placeMode=(placeMode===mode)?'':mode;
   el('placeBtn').classList.toggle('on',placeMode==='ball');
-  el('placeBtn').textContent='Click pitch to place ball: '+(placeMode==='ball'?'on':'off');
+  el('placeBtn').textContent='Place ball: '+(placeMode==='ball'?'on':'off');
   el('passPlaceBtn').classList.toggle('on',placeMode==='passer');
-  el('passPlaceBtn').textContent='Click pitch to place passer: '+(placeMode==='passer'?'on':'off');
+  el('passPlaceBtn').textContent='Place passer: '+(placeMode==='passer'?'on':'off');
   el('keeperPlaceBtn').classList.toggle('on',placeMode==='keeper');
-  el('keeperPlaceBtn').textContent='Click pitch to place keeper: '+(placeMode==='keeper'?'on':'off');
+  el('keeperPlaceBtn').textContent='Place keeper: '+(placeMode==='keeper'?'on':'off');
 }
 el('placeBtn').addEventListener('click',()=>setPlace('ball'));
 el('passPlaceBtn').addEventListener('click',()=>setPlace('passer'));
@@ -1043,7 +1048,7 @@ document.querySelectorAll('#postSeg button').forEach(b=>b.addEventListener('clic
 
 function setPass(on){
   passOn=on;
-  el('passBtn').textContent='Enable pass move: '+(on?'on':'off');
+  el('passBtn').textContent='Pass move: '+(on?'on':'off');
   el('passBtn').classList.toggle('on',on);
   el('passCtl').style.display=on?'block':'none';
   update();
@@ -1169,7 +1174,7 @@ function readUrl(){
 }
 el('copyBtn').addEventListener('click',()=>{
   writeUrl();
-  const b=el('copyBtn'), keep='Copy link to this position';
+  const b=el('copyBtn'), keep='Copy link';
   const done=()=>{ b.textContent='Link copied ✓'; b.classList.add('on');
     clearTimeout(b._t); b._t=setTimeout(()=>{b.textContent=keep; b.classList.remove('on');},1600); };
   if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(done,done);
