@@ -12,5 +12,5 @@ true time so the Energy dashboard shows when energy was used.
 ### on-the-angle
 
 An interactive 3D model of field-hockey goalkeeper positioning, published to
-GitHub Pages at <https://bweesy.github.io/gubbins/>. One self-contained HTML
-page; no build step.
+GitHub Pages at <https://bweesy.github.io/gubbins/on-the-angle/>. One
+self-contained HTML page; no build step.
