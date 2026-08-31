@@ -393,10 +393,40 @@ const passGroup = new THREE.Group(); scene.add(passGroup);
 const heatGroup = new THREE.Group(); scene.add(heatGroup);
 
 /* floating stats billboard over the goal (canvas texture on a camera-facing sprite) */
-const bbCanvas=document.createElement('canvas'); bbCanvas.width=480; bbCanvas.height=420;
+/* Drawn in a fixed 480x420 design space, but rasterised at whatever the sprite
+   actually occupies on screen. That sizing is what keeps the text crisp: the
+   texture is non-power-of-two, so three cannot mipmap it, and any minification
+   lands straight on the aliasing this panel used to show on a large window. */
+const BB_W=480, BB_H=420, BB_ASPECT=BB_W/BB_H;
+const bbCanvas=document.createElement('canvas'); bbCanvas.width=BB_W; bbCanvas.height=BB_H;
 const bbCtx=bbCanvas.getContext('2d');
-const bbTex=new THREE.CanvasTexture(bbCanvas); bbTex.minFilter=THREE.LinearFilter;
-const BB_ASPECT=bbCanvas.width/bbCanvas.height;
+const bbTex=new THREE.CanvasTexture(bbCanvas);
+bbTex.minFilter=THREE.LinearFilter; bbTex.magFilter=THREE.LinearFilter; bbTex.generateMipmaps=false;
+
+/* Fraction of the viewport height the panel fills. A phone is held close and
+   has no room to spare, so it keeps the original size; a desktop window has
+   both the room and the pixels for a larger, more readable panel. */
+function bbHeightFactor(){
+  const w=window.innerWidth;
+  if(w<=560) return 0.13;
+  if(w>=1200) return 0.20;
+  return 0.13+(0.20-0.13)*(w-560)/640;
+}
+/* Match the canvas to the sprite's on-screen device pixels, so the texture is
+   sampled at about 1:1 rather than minified. Resized only when it has drifted
+   enough to matter -- reallocating the canvas on every frame would be worse
+   than the aliasing it fixes. */
+function sizeBillboardCanvas(){
+  const px=Math.min(devicePixelRatio||1,2);
+  const onScreen=bbHeightFactor()/(2*Math.tan(camera.fov*Math.PI/360));   // sprite height as a fraction of the viewport
+  // The sprite holds a constant angular size, so its on-screen size does not
+  // change with zoom and 1:1 stays 1:1 -- no need to supersample for motion.
+  // The floor only guards a degenerate viewport (a hidden pane reports 0).
+  const want=Math.round(Math.max(128,Math.min(1024,onScreen*window.innerHeight*px)));
+  if(Math.abs(want-bbCanvas.height)/bbCanvas.height>0.08){
+    bbCanvas.height=want; bbCanvas.width=Math.round(want*BB_ASPECT);
+  }
+}
 const billboard=new THREE.Sprite(new THREE.SpriteMaterial({map:bbTex, transparent:true, depthTest:true, depthWrite:false}));
 billboard.position.set(0,3.2,0); scene.add(billboard);
 
@@ -591,8 +621,14 @@ function computeHeatmap(){
 
 /* ---- floating stats billboard ---- */
 function roundRectPath(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+let lastBB=null;
 function drawBillboard(d){
-  const c=bbCtx, W=bbCanvas.width, H=bbCanvas.height;
+  lastBB=d;
+  sizeBillboardCanvas();
+  // Everything below is written in the 480x420 design space; the transform maps
+  // it onto whatever the canvas is currently sized to.
+  const c=bbCtx, W=BB_W, H=BB_H;
+  c.setTransform(bbCanvas.width/BB_W,0,0,bbCanvas.height/BB_H,0,0);
   c.clearRect(0,0,W,H);
   roundRectPath(c,6,6,W-12,H-12,26); c.fillStyle='rgba(14,22,36,0.92)'; c.fill();
   c.lineWidth=2; c.strokeStyle='rgba(120,150,180,0.35)'; c.stroke();
@@ -788,6 +824,12 @@ let lastState=null;
 /*  Custom orbit camera (no OrbitControls in r128)                     */
 /* ------------------------------------------------------------------ */
 const cam={target:new THREE.Vector3(0,1.0,6), radius:20, theta:0, phi:1.02};
+const deg=r=>r*180/Math.PI, rad=d=>d*Math.PI/180;
+let camFromUrl=false;
+/* Clamps shared by the pointer handlers and by a camera restored from a link,
+   so a stale or hand-edited URL cannot wedge the view under the pitch. */
+const clampRadius=r=>Math.max(4,Math.min(70,r));
+const clampPhi=p=>Math.max(0.05,Math.min(Math.PI/2-0.02,p));
 function applyCam(){
   const sp=Math.sin(cam.phi), cp=Math.cos(cam.phi);
   camera.position.set(
@@ -802,7 +844,7 @@ function setFromPositionTarget(pos,tgt){
   const off=pos.clone().sub(tgt); cam.radius=Math.max(3,off.length());
   cam.theta=Math.atan2(off.x, off.z);
   cam.phi=Math.acos(Math.max(-1,Math.min(1,off.y/cam.radius)));
-  cam.phi=Math.max(0.05,Math.min(Math.PI/2-0.02,cam.phi));
+  cam.phi=clampPhi(cam.phi);
 }
 
 /* pointer handling: left = orbit, right/shift = pan, wheel = zoom, click(place) */
@@ -824,8 +866,9 @@ dom.addEventListener('pointermove',e=>{
     cam.target.addScaledVector(right,-dx*k); cam.target.addScaledVector(up, dy*k);
   }else{
     cam.theta-=dx*0.005; cam.phi-=dy*0.005;
-    cam.phi=Math.max(0.05,Math.min(Math.PI/2-0.02,cam.phi));
+    cam.phi=clampPhi(cam.phi);
   }
+  camMoved();
 });
 dom.addEventListener('pointerup',e=>{
   if(drag && placeMode && drag.button===0 && drag.moved<5) tryPlace(e);
@@ -834,7 +877,8 @@ dom.addEventListener('pointerup',e=>{
 dom.addEventListener('wheel',e=>{
   e.preventDefault();
   cam.radius*=(1+Math.sign(e.deltaY)*0.08);
-  cam.radius=Math.max(4,Math.min(70,cam.radius));
+  cam.radius=clampRadius(cam.radius);
+  camMoved();
 },{passive:false});
 dom.addEventListener('contextmenu',e=>e.preventDefault());
 
@@ -845,7 +889,7 @@ dom.addEventListener('touchmove',e=>{
     const dx=e.touches[0].clientX-e.touches[1].clientX;
     const dy=e.touches[0].clientY-e.touches[1].clientY;
     const dist=Math.hypot(dx,dy);
-    if(pinch) { cam.radius*=pinch/dist; cam.radius=Math.max(4,Math.min(70,cam.radius)); }
+    if(pinch) { cam.radius*=pinch/dist; cam.radius=clampRadius(cam.radius); camMoved(); }
     pinch=dist; e.preventDefault();
   }
 },{passive:false});
@@ -884,10 +928,15 @@ function setView(v){
     setFromPositionTarget(pos, new THREE.Vector3(lastState.bx,0.3,lastState.bz));
   }
 }
+function clearViewButtons(){ document.querySelectorAll('#views button').forEach(x=>x.classList.remove('on')); }
+/* A hand-driven camera no longer matches any preset, and the new angle belongs
+   in the URL. scheduleUrl debounces, so a drag costs one replaceState per
+   250ms rather than one per frame. */
+function camMoved(){ clearViewButtons(); scheduleUrl(); }
 document.querySelectorAll('#views button').forEach(b=>{
   b.addEventListener('click',()=>{
-    document.querySelectorAll('#views button').forEach(x=>x.classList.remove('on'));
-    b.classList.add('on'); setView(b.dataset.v);
+    clearViewButtons();
+    b.classList.add('on'); setView(b.dataset.v); scheduleUrl();
   });
 });
 
@@ -1031,7 +1080,11 @@ function serialise(){
   const ov=(el('oCone').checked?1:0)|(el('oBis').checked?2:0)|(el('oCover').checked?4:0)|(el('oPyr').checked?8:0)|(el('oGrid').checked?16:0)|(el('oBillboard').checked?32:0);
   return { bx:+el('bx').value, bz:+el('bz').value, km:keeperMode, pr:priority, off:+el('off').value,
     kx:+el('kx').value, kz:+el('kz').value, kw:+el('kw').value, kh:+el('kh').value, om:+el('offMax').value,
-    cov:coverageMode, po:posture, cm:coordMode, ps:passOn?1:0, px:+el('px').value, pz:+el('pz').value, ov };
+    cov:coverageMode, po:posture, cm:coordMode, ps:passOn?1:0, px:+el('px').value, pz:+el('pz').value, ov,
+    // Camera as one field rather than six: the hash stays readable and parses
+    // in a single step. "~" survives encodeURIComponent untouched; "," does not.
+    cam:[cam.target.x.toFixed(2),cam.target.y.toFixed(2),cam.target.z.toFixed(2),
+         cam.radius.toFixed(2),deg(cam.theta).toFixed(1),deg(cam.phi).toFixed(1)].join('~') };
 }
 function writeUrl(){
   const p=serialise(), parts=[];
@@ -1053,6 +1106,14 @@ function readUrl(){
   if(p.cov) coverageMode=p.cov;
   if(p.po) posture=(p.po==='spread'?'spread':'set');
   if(p.ps!==undefined) passOn=(p.ps==='1');
+  if(p.cam){
+    const c=p.cam.split('~').map(Number);
+    if(c.length===6&&c.every(Number.isFinite)){
+      cam.target.set(c[0],c[1],c[2]);
+      cam.radius=clampRadius(c[3]); cam.theta=rad(c[4]); cam.phi=clampPhi(rad(c[5]));
+      camFromUrl=true;
+    }
+  }
   if(p.ov!==undefined){ const ov=+p.ov;
     el('oCone').checked=!!(ov&1); el('oBis').checked=!!(ov&2); el('oCover').checked=!!(ov&4);
     el('oPyr').checked=!!(ov&8); el('oGrid').checked=!!(ov&16); el('oBillboard').checked=!!(ov&32); }
@@ -1067,6 +1128,8 @@ el('copyBtn').addEventListener('click',()=>{
 });
 function initFromUrl(){
   readUrl();
+  // A link carrying its own camera is not sitting on the Default preset.
+  if(camFromUrl) clearViewButtons();
   setCoord(coordMode);
   setMode(keeperMode);
   setPriority(priority);
@@ -1104,6 +1167,10 @@ addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth,innerHeight);
   applyViewShift();
+  // Both the panel's size and its texture resolution follow the viewport, so a
+  // resize needs a redraw. Reuses the last payload rather than recomputing the
+  // geometry, which has not changed.
+  if(lastBB) drawBillboard(lastBB);
 });
 
 /* ------------------------------------------------------------------ */
@@ -1123,7 +1190,7 @@ const BB_ANCHOR=new THREE.Vector3(0, GOAL_H+0.3, 0);   // bottom of billboard si
 (function loop(){
   applyCam();
   if(billboard.visible){
-    const d=camera.position.distanceTo(BB_ANCHOR), h=0.13*d;
+    const d=camera.position.distanceTo(BB_ANCHOR), h=bbHeightFactor()*d;
     billboard.scale.set(h*BB_ASPECT, h, 1);
     billboard.position.set(0, BB_ANCHOR.y + h/2, 0);
   }
