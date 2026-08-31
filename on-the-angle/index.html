@@ -25,16 +25,32 @@
      the view-preset bar would sit on top of the panel. */
   #controls{top:12px;left:12px;width:266px;max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);
             overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:12px 13px}
-  #ctlHeader{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none}
+  /* Pinned to the top of the scrolling panel, so the collapse control stays
+     reachable however far down you are, and the name stays in a screenshot.
+     Negative margins let it span the panel's padding, and the fill is fully
+     opaque so controls scrolling underneath do not ghost through the title. */
+  #ctlHeader{position:sticky;top:-12px;z-index:3;
+             margin:-12px -13px 0;padding:12px 13px 9px;
+             border-radius:11px 11px 0 0;background:#0e1724;
+             display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none}
   #ctlHeader h1{margin:0}
   #collapseBtn{padding:2px 9px;font-size:14px;line-height:1;border-radius:7px}
   #collapseBtn .chev{display:inline-block;transition:transform .15s}
   #controls.collapsed{width:auto}
   #controls.collapsed #controlsBody{display:none}
   #controls.collapsed #collapseBtn .chev{transform:rotate(-90deg)}
-  #readout{top:12px;right:12px;width:236px;padding:12px 13px}
-  #views{left:50%;bottom:12px;transform:translateX(-50%);padding:7px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 24px)}
-  #hint{right:12px;bottom:12px;padding:8px 10px;font-size:11px;color:var(--muted);max-width:230px;line-height:1.45}
+  #readout{top:12px;right:12px;width:236px;padding:12px 13px;overflow:auto;overscroll-behavior:contain}
+  /* Too narrow for the readout and the controls side by side: the billboard
+     carries the same numbers, so drop the readout rather than overlap. */
+  #readout.crowded{display:none}
+  /* Bottom-right stack: the presets sit in the corner with the hint above them.
+     Both used to be fixed in their own right, which put them on top of each
+     other once the presets moved out of the centre. */
+  #corner{position:fixed;right:12px;bottom:12px;display:flex;flex-direction:column;
+          align-items:flex-end;gap:8px;max-width:calc(100vw - 24px);pointer-events:none}
+  #corner > *{pointer-events:auto;position:static}
+  #views{padding:7px;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:100%}
+  #hint{padding:8px 10px;font-size:11px;color:var(--muted);max-width:230px;line-height:1.45}
 
   h1{font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin:0 0 2px;color:var(--ink)}
   .sub{font-size:11px;color:var(--muted);margin:0 0 10px}
@@ -238,16 +254,18 @@
   <div class="cvNote" id="cvNote"></div>
 </div>
 
-<div id="views" class="panel">
-  <button data-v="reset" class="on">Default</button>
-  <button data-v="plan">Plan</button>
-  <button data-v="behind">Behind goal</button>
-  <button data-v="atk">Attacker POV</button>
-  <button data-v="gk">Keeper POV</button>
-</div>
+<div id="corner">
+  <div id="hint" class="panel">
+    Green = net the keeper covers. Red = open net. Advance the keeper along the bisector to watch the cone close.
+  </div>
 
-<div id="hint" class="panel">
-  Green = net the keeper covers. Red = open net. Advance the keeper along the bisector to watch the cone close.
+  <div id="views" class="panel">
+    <button data-v="reset" class="on">Default</button>
+    <button data-v="plan">Plan</button>
+    <button data-v="behind">Behind goal</button>
+    <button data-v="atk">Attacker POV</button>
+    <button data-v="gk">Keeper POV</button>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -1172,7 +1190,7 @@ function initFromUrl(){
 }
 
 /* ---- collapsible control panel (handy on mobile) ---- */
-const controlsPanel=el('controls'), viewsBar=document.getElementById('views');
+const controlsPanel=el('controls'), readoutPanel=el('readout'), cornerStack=el('corner');
 /* Fit the stats panel into whatever horizontal space the controls leave, and
    shift the rendered view right by just enough to clear them.
 
@@ -1214,11 +1232,23 @@ function fitControlsToViewport(){
   // counts the strip behind a retracting toolbar.
   const vh=(window.visualViewport && window.visualViewport.height) || window.innerHeight;
   if(!vh) return;
-  controlsPanel.style.maxHeight='';
-  const cr=controlsPanel.getBoundingClientRect(), vr=viewsBar.getBoundingClientRect();
-  const clash = vr.left < cr.right && vr.right > cr.left && vr.height > 0;
-  const reserve = clash ? Math.max(0, vh - vr.top + 8) : 0;
-  controlsPanel.style.maxHeight = Math.max(120, vh - 24 - reserve) + 'px';
+  // Both side panels have to stop short of the bottom-right stack. Measure with
+  // the caps cleared, so a previous pass cannot feed back into this one.
+  [controlsPanel, readoutPanel].forEach(p=>{ p.style.maxHeight=''; });
+  readoutPanel.classList.remove('crowded');
+  const stack=cornerStack.getBoundingClientRect();
+  // On a narrow screen the readout and the controls do not both fit across the
+  // top. The billboard carries the same figures, so the readout gives way.
+  const cRect=controlsPanel.getBoundingClientRect(), rRect=readoutPanel.getBoundingClientRect();
+  if(rRect.left<cRect.right+8 && rRect.right>cRect.left && rRect.top<cRect.bottom && rRect.bottom>cRect.top)
+    readoutPanel.classList.add('crowded');
+  [controlsPanel, readoutPanel].forEach(p=>{
+    if(getComputedStyle(p).display==='none') return;
+    const r=p.getBoundingClientRect();
+    const clash = stack.height>0 && stack.left<r.right && stack.right>r.left;
+    const reserve = clash ? Math.max(0, vh - stack.top + 8) : 0;
+    p.style.maxHeight = Math.max(120, vh - 24 - reserve) + 'px';
+  });
 }
 function setCollapsed(c){
   controlsPanel.classList.toggle('collapsed',c);
