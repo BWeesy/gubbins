@@ -393,10 +393,40 @@ const passGroup = new THREE.Group(); scene.add(passGroup);
 const heatGroup = new THREE.Group(); scene.add(heatGroup);
 
 /* floating stats billboard over the goal (canvas texture on a camera-facing sprite) */
-const bbCanvas=document.createElement('canvas'); bbCanvas.width=480; bbCanvas.height=420;
+/* Drawn in a fixed 480x420 design space, but rasterised at whatever the sprite
+   actually occupies on screen. That sizing is what keeps the text crisp: the
+   texture is non-power-of-two, so three cannot mipmap it, and any minification
+   lands straight on the aliasing this panel used to show on a large window. */
+const BB_W=480, BB_H=420, BB_ASPECT=BB_W/BB_H;
+const bbCanvas=document.createElement('canvas'); bbCanvas.width=BB_W; bbCanvas.height=BB_H;
 const bbCtx=bbCanvas.getContext('2d');
-const bbTex=new THREE.CanvasTexture(bbCanvas); bbTex.minFilter=THREE.LinearFilter;
-const BB_ASPECT=bbCanvas.width/bbCanvas.height;
+const bbTex=new THREE.CanvasTexture(bbCanvas);
+bbTex.minFilter=THREE.LinearFilter; bbTex.magFilter=THREE.LinearFilter; bbTex.generateMipmaps=false;
+
+/* Fraction of the viewport height the panel fills. A phone is held close and
+   has no room to spare, so it keeps the original size; a desktop window has
+   both the room and the pixels for a larger, more readable panel. */
+function bbHeightFactor(){
+  const w=window.innerWidth;
+  if(w<=560) return 0.13;
+  if(w>=1200) return 0.20;
+  return 0.13+(0.20-0.13)*(w-560)/640;
+}
+/* Match the canvas to the sprite's on-screen device pixels, so the texture is
+   sampled at about 1:1 rather than minified. Resized only when it has drifted
+   enough to matter -- reallocating the canvas on every frame would be worse
+   than the aliasing it fixes. */
+function sizeBillboardCanvas(){
+  const px=Math.min(devicePixelRatio||1,2);
+  const onScreen=bbHeightFactor()/(2*Math.tan(camera.fov*Math.PI/360));   // sprite height as a fraction of the viewport
+  // The sprite holds a constant angular size, so its on-screen size does not
+  // change with zoom and 1:1 stays 1:1 -- no need to supersample for motion.
+  // The floor only guards a degenerate viewport (a hidden pane reports 0).
+  const want=Math.round(Math.max(128,Math.min(1024,onScreen*window.innerHeight*px)));
+  if(Math.abs(want-bbCanvas.height)/bbCanvas.height>0.08){
+    bbCanvas.height=want; bbCanvas.width=Math.round(want*BB_ASPECT);
+  }
+}
 const billboard=new THREE.Sprite(new THREE.SpriteMaterial({map:bbTex, transparent:true, depthTest:true, depthWrite:false}));
 billboard.position.set(0,3.2,0); scene.add(billboard);
 
@@ -591,8 +621,14 @@ function computeHeatmap(){
 
 /* ---- floating stats billboard ---- */
 function roundRectPath(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+let lastBB=null;
 function drawBillboard(d){
-  const c=bbCtx, W=bbCanvas.width, H=bbCanvas.height;
+  lastBB=d;
+  sizeBillboardCanvas();
+  // Everything below is written in the 480x420 design space; the transform maps
+  // it onto whatever the canvas is currently sized to.
+  const c=bbCtx, W=BB_W, H=BB_H;
+  c.setTransform(bbCanvas.width/BB_W,0,0,bbCanvas.height/BB_H,0,0);
   c.clearRect(0,0,W,H);
   roundRectPath(c,6,6,W-12,H-12,26); c.fillStyle='rgba(14,22,36,0.92)'; c.fill();
   c.lineWidth=2; c.strokeStyle='rgba(120,150,180,0.35)'; c.stroke();
@@ -1131,6 +1167,10 @@ addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth,innerHeight);
   applyViewShift();
+  // Both the panel's size and its texture resolution follow the viewport, so a
+  // resize needs a redraw. Reuses the last payload rather than recomputing the
+  // geometry, which has not changed.
+  if(lastBB) drawBillboard(lastBB);
 });
 
 /* ------------------------------------------------------------------ */
@@ -1150,7 +1190,7 @@ const BB_ANCHOR=new THREE.Vector3(0, GOAL_H+0.3, 0);   // bottom of billboard si
 (function loop(){
   applyCam();
   if(billboard.visible){
-    const d=camera.position.distanceTo(BB_ANCHOR), h=0.13*d;
+    const d=camera.position.distanceTo(BB_ANCHOR), h=bbHeightFactor()*d;
     billboard.scale.set(h*BB_ASPECT, h, 1);
     billboard.position.set(0, BB_ANCHOR.y + h/2, 0);
   }
