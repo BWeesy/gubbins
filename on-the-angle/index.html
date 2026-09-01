@@ -169,15 +169,6 @@
   <p class="sub">Field-hockey shooting geometry. Drag to orbit · scroll to zoom · right-drag to pan.</p>
 
   <div class="group" style="border-top:none;padding-top:0;margin-top:0">
-    <div class="glabel">Coordinates</div>
-    <div class="seg">
-      <button id="coordCart" class="on">Cartesian</button>
-      <button id="coordPolar">Polar</button>
-    </div>
-    <p class="sub" style="margin:7px 0 0">Polar is from goal centre: θ = 0° straight out, ± to each side; r = distance from goal.</p>
-  </div>
-
-  <div class="group">
     <div class="glabel">Scenarios</div>
     <div class="seg wrap" id="scenSeg">
       <button data-s="topD">Top of D</button>
@@ -188,7 +179,7 @@
   </div>
 
   <div class="group">
-    <div class="glabel">Shot (ball)</div>
+    <div class="glabel">Click to place ball</div>
     <button id="placeBtn" style="width:100%;margin-bottom:8px">Place ball: off</button>
     <div id="ballCart">
       <div class="row"><label>Across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="bxVal"></span></div>
@@ -242,6 +233,15 @@
     <input class="slider" id="kw" type="range" min="0.4" max="1.6" step="0.05" value="0.9">
     <div class="row"><label>Max off line</label><span class="val" id="offMaxVal"></span></div>
     <input class="slider" id="offMax" type="range" min="1" max="14" step="0.1" value="6.4">
+  </div>
+
+  <div class="group">
+    <div class="glabel">Coordinates</div>
+    <div class="seg">
+      <button id="coordCart" class="on">Cartesian</button>
+      <button id="coordPolar">Polar</button>
+    </div>
+    <p class="sub" style="margin:7px 0 0">Polar is from goal centre: θ = 0° straight out, ± to each side; r = distance from goal.</p>
   </div>
 
   <div class="group">
