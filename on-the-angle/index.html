@@ -52,6 +52,30 @@
   #views{padding:7px;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:100%}
   #hint{padding:8px 10px;font-size:11px;color:var(--muted);max-width:230px;line-height:1.45}
 
+  /* Stats HUD. Everything is sized from --u, one design unit in CSS pixels, so
+     the whole panel scales as a piece from a single number set per frame. The
+     design is the old 480x420 canvas layout, unit for unit. */
+  #statsHud{
+    position:fixed;left:0;top:0;transform-origin:0 0;
+    width:calc(var(--u)*480);height:calc(var(--u)*420);
+    padding:calc(var(--u)*26) calc(var(--u)*24);
+    background:rgba(14,22,36,.92);border:calc(var(--u)*2) solid rgba(120,150,180,.35);
+    border-radius:calc(var(--u)*26);
+    display:flex;flex-direction:column;gap:calc(var(--u)*14);
+    pointer-events:none;visibility:hidden;will-change:transform;backface-visibility:hidden;
+    font-family:var(--sans);line-height:1;
+  }
+  #hudTop{display:flex;justify-content:space-between;align-items:flex-start;gap:calc(var(--u)*16)}
+  #hudLabel{font-size:calc(var(--u)*24);font-weight:700;letter-spacing:.04em;
+            text-transform:uppercase;color:var(--cyan);margin-bottom:calc(var(--u)*10)}
+  #hudPct{font-size:calc(var(--u)*100);font-weight:700;color:var(--green);letter-spacing:-.02em}
+  #hudGaps{text-align:left;flex:none}
+  #hudGaps .k{font-size:calc(var(--u)*20);color:var(--muted);margin-top:calc(var(--u)*6)}
+  #hudGaps .v{font-size:calc(var(--u)*34);font-weight:700;color:var(--ink)}
+  #hudGoal{display:block;width:calc(var(--u)*300);height:calc(var(--u)*175);margin:auto auto 0}
+  #hudOpen{fill:var(--red)}
+  #hudCovered{fill:var(--green)}
+
   h1{font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin:0 0 2px;color:var(--ink)}
   .sub{font-size:11px;color:var(--muted);margin:0 0 10px}
   .group{border-top:1px solid var(--edge);padding-top:9px;margin-top:9px}
@@ -104,6 +128,37 @@
 </head>
 <body>
 <div id="stage"></div>
+
+<!-- The stats panel over the goal. It holds a constant on-screen size, always
+     faces the camera and never rotates, so it was using WebGL for nothing: it
+     is a HUD, and it is now built as one. As a canvas texture on a sprite it
+     rendered stretched, with the left half missing, on a Samsung Xclipse GPU
+     that three separate fixes failed to satisfy and none of us can reproduce.
+     Plain DOM and SVG have no texture to mangle, and the text is native rather
+     than rasterised, so it is sharper at every size into the bargain. -->
+<div id="statsHud" aria-hidden="true">
+  <div id="hudTop">
+    <div id="hudMain">
+      <div id="hudLabel">Goal face covered</div>
+      <div id="hudPct">0%</div>
+    </div>
+    <div id="hudGaps">
+      <div class="k">near open</div><div class="v" id="hudNear">0 cm</div>
+      <div class="k">far open</div><div class="v" id="hudFar">0 cm</div>
+    </div>
+  </div>
+  <svg id="hudGoal" viewBox="0 0 366 214" preserveAspectRatio="none" focusable="false">
+    <defs>
+      <pattern id="hudHatch" width="40" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+        <line x1="10" y1="0" x2="10" y2="40" stroke="rgba(255,255,255,.55)" stroke-width="16"/>
+      </pattern>
+    </defs>
+    <rect x="0" y="0" width="366" height="214" id="hudOpen"/>
+    <rect x="0" y="0" width="366" height="214" fill="url(#hudHatch)"/>
+    <polygon id="hudCovered" points=""/>
+    <rect x="0" y="0" width="366" height="214" fill="none" stroke="#dfeef2" stroke-width="4"/>
+  </svg>
+</div>
 
 <div id="controls" class="panel">
   <div id="ctlHeader">
@@ -370,17 +425,8 @@ function scaleUV(g,su,sv){
   uv.needsUpdate=true; return g;
 }
 
-/* Same hatch as a 2D fill, for the billboard's goal-mouth schematic. */
-const hatchTile=(()=>{
-  const c=document.createElement('canvas'); c.width=c.height=14;
-  const x=c.getContext('2d');
-  x.strokeStyle='rgba(255,255,255,0.55)'; x.lineWidth=2.5; x.lineCap='square';
-  for(let o=-14;o<=14;o+=7){ x.beginPath(); x.moveTo(o,14); x.lineTo(o+14,0); x.stroke(); }
-  return c;
-})();
-// The tile is drawn once; only the pattern wrapper is per-draw, because the
-// billboard canvas is reallocated when the viewport changes.
-function hatchPattern(ctx){ return ctx.createPattern(hatchTile,'repeat'); }
+/* The HUD's matching hatch is an SVG <pattern> in its markup -- the 2D canvas
+   tile that used to live here went with the canvas. */
 const HALF = GOAL_W / 2;              // 1.83
 const CIRCLE_R = 14.63;              // shooting circle radius from each post
 const OUTER_R = CIRCLE_R + 5;        // dashed line 5 m outside
@@ -524,35 +570,19 @@ passer.visible=false; scene.add(passer);
 const passGroup = new THREE.Group(); scene.add(passGroup);
 const heatGroup = new THREE.Group(); scene.add(heatGroup);
 
-/* floating stats billboard over the goal (canvas texture on a camera-facing sprite) */
-/* Drawn in a 480x420 design space onto a fixed 512x512 canvas.
+/* The stats panel is a DOM overlay -- see the note beside its markup. Only the
+   anchor it hangs from lives in the scene. */
+const BB_ANCHOR=new THREE.Vector3(0, GOAL_H+0.3, 0);   // bottom edge sits here, above the crossbar
+// Looked up lazily: el() is defined further down, with the rest of the UI wiring.
+let hud=null;
+let hudVisible=true;
 
-   Power of two, so WebGL1 will mipmap it. Minification is then filtered
-   properly at every size, which is what kills the aliasing this panel showed
-   on a large window -- rather than only where the texture happens to match the
-   sprite, which is what sizing the canvas to the sprite was buying.
-
-   Never resized, because that sizing is what broke it on a Samsung Galaxy:
-   correct on every viewport and pixel ratio available here, stretched with the
-   left half missing there, and two attempts at fixing it in place failed.
-   Resizing a live canvas under a texture was the only thing that phone did
-   differently, so it is gone.
-
-   512 holds the 480-wide design at 1.07x, leaving 64px of transparent padding
-   above it so the card sits flush with the bottom of the square sprite. */
+/* The 480x420 design the HUD's CSS is written in; BB_ASPECT is what the layout
+   fit logic uses to know how wide the panel will be for a given height. */
 const BB_W=480, BB_H=420, BB_ASPECT=BB_W/BB_H;
-const BB_TEX=512;                            // power of two, for mipmaps
-const BB_SCALE=BB_TEX/BB_W;                  // 1.0667
-const BB_PAD=BB_TEX-BB_H*BB_SCALE;           // 64px of empty above the card
-const BB_CARD_FRAC=(BB_TEX-BB_PAD)/BB_TEX;   // card height as a fraction of the sprite
-const bbCanvas=document.createElement('canvas'); bbCanvas.width=bbCanvas.height=BB_TEX;
-const bbCtx=bbCanvas.getContext('2d');
-const bbTex=new THREE.CanvasTexture(bbCanvas);
-bbTex.minFilter=THREE.LinearMipmapLinearFilter; bbTex.magFilter=THREE.LinearFilter;
-bbTex.generateMipmaps=true;
 
-/* How tall the panel is, as a fraction of the viewport. layoutBillboard() sets
-   it; the render loop and the canvas sizing read it. */
+/* How tall the panel is, as a fraction of the viewport. applyViewShift() sets
+   it; the HUD placement reads it. */
 let bbHeightF=0.13;
 function bbHeightFactor(){ return bbHeightF; }
 /* What it would like to be, before the controls are taken into account. A phone
@@ -564,10 +594,6 @@ function bbDesiredFactor(){
   if(w>=1200) return 0.20;
   return 0.13+(0.20-0.13)*(w-560)/640;
 }
-/* Match the canvas to the sprite's on-screen device pixels, so the texture is
-   sampled at about 1:1 rather than minified. */
-const billboard=new THREE.Sprite(new THREE.SpriteMaterial({map:bbTex, transparent:true, depthTest:true, depthWrite:false}));
-billboard.position.set(0,3.2,0); scene.add(billboard);
 
 /* ------------------------------------------------------------------ */
 /*  Live geometry overlay group                                        */
@@ -776,39 +802,49 @@ function computeHeatmap(){
   }
 }
 
-/* ---- floating stats billboard ---- */
-function roundRectPath(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+/* ---- stats HUD ---- */
+/* Writes the numbers and the goal-mouth schematic. No canvas, no texture: the
+   text is native and the schematic is SVG, so both stay sharp at any size and
+   there is nothing for a driver to sample wrongly. Placement is separate, in
+   placeHud(), because it follows the camera rather than the state. */
 function drawBillboard(d){
-  // Everything below is written in the 480x420 design space; one uniform
-  // transform maps it onto the fixed canvas, shifted down so the card sits at
-  // the bottom of the square and the padding lands above it.
-  const c=bbCtx, W=BB_W, H=BB_H;
-  c.setTransform(BB_SCALE,0,0,BB_SCALE,0,BB_PAD);
-  c.clearRect(0,-BB_PAD/BB_SCALE,W,H+BB_PAD/BB_SCALE);
-  roundRectPath(c,6,6,W-12,H-12,26); c.fillStyle='rgba(14,22,36,0.92)'; c.fill();
-  c.lineWidth=2; c.strokeStyle='rgba(120,150,180,0.35)'; c.stroke();
-  c.textBaseline='top';
-  c.fillStyle='#37d6c6'; c.font='bold 24px system-ui,Arial'; c.fillText((d.metric+' covered').toUpperCase(), 30, 26);
-  c.fillStyle=PAL().coveredCss; c.font='bold 100px system-ui,Arial'; c.fillText(Math.round(d.pct)+'%', 24, 52);
-  c.fillStyle='#8ea6b6'; c.font='20px system-ui,Arial'; c.fillText('near open', 300, 58);
-  c.fillStyle='#e9f0f5'; c.font='bold 34px system-ui,Arial'; c.fillText((d.nearGap*100).toFixed(0)+' cm', 300, 82);
-  c.fillStyle='#8ea6b6'; c.font='20px system-ui,Arial'; c.fillText('far open', 300, 128);
-  c.fillStyle='#e9f0f5'; c.font='bold 34px system-ui,Arial'; c.fillText((d.farGap*100).toFixed(0)+' cm', 300, 152);
-  // goal-mouth schematic: open net first, hatched, then the covered region over it
-  const sw=300, sh=sw*(GOAL_H/GOAL_W), sx=(W-sw)/2, sy=200;
-  const mapx=X=>sx+(X+HALF)/GOAL_W*sw, mapy=Y=>sy+(1-Y/GOAL_H)*sh;
-  c.fillStyle=PAL().openFill; c.fillRect(sx,sy,sw,sh);
-  // Hatch the whole mouth, then paint the covered region over it: open net
-  // ends up striped, covered stays flat, so the two separate without colour.
-  c.save(); c.fillStyle=hatchPattern(c); c.fillRect(sx,sy,sw,sh); c.restore();
-  c.fillStyle=PAL().coveredFill;
+  el('hudLabel').textContent=d.metric+' covered';
+  el('hudPct').textContent=Math.round(d.pct)+'%';
+  el('hudNear').textContent=(d.nearGap*100).toFixed(0)+' cm';
+  el('hudFar').textContent=(d.farGap*100).toFixed(0)+' cm';
+  // SVG viewBox is the goal mouth in centimetres, origin at the near post,
+  // y down -- so the covered polygon maps straight across from metres.
+  const mapx=X=>((X+HALF)*100).toFixed(1), mapy=Y=>((GOAL_H-Y)*100).toFixed(1);
+  let pts='';
   if(d.facePoly && d.facePoly.length>=3){
-    c.beginPath(); d.facePoly.forEach((p,i)=>{ const X=mapx(p[0]),Y=mapy(p[1]); i?c.lineTo(X,Y):c.moveTo(X,Y); }); c.closePath(); c.fill();
+    pts=d.facePoly.map(p=>mapx(p[0])+','+mapy(p[1])).join(' ');
   } else if(d.coveredW>0){
-    c.fillRect(mapx(d.covL), sy, (d.covR-d.covL)/GOAL_W*sw, sh);
+    // Ground-line mode has no polygon, just a covered span: draw it full height.
+    pts=[[d.covL,0],[d.covR,0],[d.covR,GOAL_H],[d.covL,GOAL_H]].map(p=>mapx(p[0])+','+mapy(p[1])).join(' ');
   }
-  c.strokeStyle='#dfeef2'; c.lineWidth=3; c.strokeRect(sx,sy,sw,sh);
-  bbTex.needsUpdate=true;
+  el('hudCovered').setAttribute('points',pts);
+}
+/* Hang the panel off the goal anchor: project it, and place the panel's bottom
+   centre there. Its on-screen height is bbHeightFactor() of the viewport and
+   does not vary with distance, which is what made this a HUD all along. */
+const _hudProj=new THREE.Vector3();
+let _hudU=-1, _hudShown=null;
+function showHud(v){ if(v!==_hudShown){ hud.style.visibility=v?'visible':'hidden'; _hudShown=v; } }
+function placeHud(){
+  if(!hud) hud=el('statsHud');
+  if(!hudVisible){ showHud(false); return; }
+  const p=_hudProj.copy(BB_ANCHOR).project(camera);
+  if(!(p.z<1 && p.x>-1.6 && p.x<1.6 && p.y>-1.6 && p.y<1.6)){ showHud(false); return; }
+  // --u drives every child's size through calc(), so writing it restyles and
+  // relays out the whole panel. Doing that per frame is what made panning
+  // judder; it only actually changes on resize or collapse.
+  const u=bbHeightFactor()*innerHeight/BB_H;          // one design unit, in CSS pixels
+  if(Math.abs(u-_hudU)>0.01){ hud.style.setProperty('--u',u+'px'); _hudU=u; }
+  // translate3d keeps this on the compositor: the panel is rasterised once and
+  // moved, rather than re-rasterised against the canvas every frame.
+  const x=(p.x*0.5+0.5)*innerWidth, y=(-p.y*0.5+0.5)*innerHeight;
+  hud.style.transform='translate3d('+(x-u*BB_W/2).toFixed(2)+'px,'+(y-u*BB_H).toFixed(2)+'px,0)';
+  showHud(true);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1107,7 +1143,7 @@ document.querySelectorAll('#views button').forEach(b=>{
 /* ------------------------------------------------------------------ */
 ['bx','bz','off','kx','kz','kw'].forEach(id=>el(id).addEventListener('input',update));
 ['oCone','oBis','oCover','oPyr','oGrid','oBillboard'].forEach(id=>el(id).addEventListener('change',()=>{
-  grid.visible=el('oGrid').checked; billboard.visible=el('oBillboard').checked; update();
+  grid.visible=el('oGrid').checked; hudVisible=el('oBillboard').checked; update();
 }));
 
 function setPlace(mode){
@@ -1189,7 +1225,7 @@ function deviceString(){
     gpu=' -- '+(dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):'renderer hidden')+
         ', webgl'+(gl instanceof WebGLRenderingContext?'1':'2')+
         ', maxtex '+gl.getParameter(gl.MAX_TEXTURE_SIZE)+
-        ', panel '+bbCanvas.width+'x'+bbCanvas.height;
+        ', hud dom';
   }catch(e){ gpu=' -- renderer details unavailable'; }
   return navigator.userAgent+' -- '+innerWidth+'x'+innerHeight+' at '+(devicePixelRatio||1)+'x'+gpu;
 }
@@ -1355,7 +1391,7 @@ function initFromUrl(){
   setPosture(posture);
   setPass(passOn);
   grid.visible=el('oGrid').checked;
-  billboard.visible=el('oBillboard').checked;
+  hudVisible=el('oBillboard').checked;
 }
 
 /* ---- collapsible control panel (handy on mobile) ---- */
@@ -1448,28 +1484,24 @@ addEventListener('resize',()=>{
 initFromUrl();
 update();
 
-/* keep the billboard a constant on-screen size, and hide the side readout while the goal is in view */
+/* Hide the side readout while the HUD is up and the goal is in view: the two
+   carry the same figures. */
 let readoutHidden=null;
 const _proj=new THREE.Vector3(), oBillboardEl=el('oBillboard');   // reused every frame
-function goalOnScreen(){ const p=_proj.copy(billboard.position).project(camera); return p.z<1 && p.x>-1.05 && p.x<1.05 && p.y>-1.05 && p.y<1.05; }
+function goalOnScreen(){ const p=_proj.copy(BB_ANCHOR).project(camera); return p.z<1 && p.x>-1.05 && p.x<1.05 && p.y>-1.05 && p.y<1.05; }
 function refreshReadout(){
   const hide = oBillboardEl.checked && goalOnScreen();
   if(hide!==readoutHidden){ el('readout').style.display = hide?'none':''; readoutHidden=hide; }
 }
-const BB_ANCHOR=new THREE.Vector3(0, GOAL_H+0.3, 0);   // bottom of billboard sits here, above the crossbar
 (function loop(){
   applyCam();
-  if(billboard.visible){
-    // The sprite is square and the card fills its lower BB_CARD_FRAC, so the
-    // sprite is scaled up by that to leave the card itself h tall. Its width
-    // still works out at h*BB_ASPECT, which is what the fit logic assumes.
-    const d=camera.position.distanceTo(BB_ANCHOR), h=bbHeightFactor()*d;
-    const s=h/BB_CARD_FRAC;
-    billboard.scale.set(s, s, 1);
-    billboard.position.set(0, BB_ANCHOR.y + s/2, 0);
-  }
-  refreshReadout();
   renderer.render(scene,camera);
+  // After the render, not before: camera.matrixWorldInverse is only brought up
+  // to date inside render(), so projecting before it placed the panel with the
+  // previous frame's camera. One frame behind the scene it is pinned to reads
+  // as judder whenever the camera moves.
+  placeHud();
+  refreshReadout();
   requestAnimationFrame(loop);
 })();
 </script>
