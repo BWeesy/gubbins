@@ -344,14 +344,32 @@ const hatchTex=(()=>{
   t.wrapS=t.wrapT=THREE.RepeatWrapping; t.magFilter=THREE.LinearFilter;
   return t;
 })();
+/* Textures that outlive the meshes borrowing them. three r128's Texture has no
+   userData, so the set is the flag. */
+const SHARED_TEX=new Set([hatchTex]);
+
+/* Tile the hatch by stretching a geometry's own UVs, rather than by cloning the
+   texture and setting its repeat. A clone per rebuild meant a fresh GPU upload
+   on every slider frame, and clearViz disposes materials but not their maps, so
+   they were never released: 120 rebuilds leaked 120 textures, 240 in
+   ground-line mode. The geometries are rebuilt and disposed anyway. */
+function scaleUV(g,su,sv){
+  const uv=g.attributes.uv; if(!uv) return g;
+  for(let i=0;i<uv.count;i++) uv.setXY(i, uv.getX(i)*su, uv.getY(i)*sv);
+  uv.needsUpdate=true; return g;
+}
+
 /* Same hatch as a 2D fill, for the billboard's goal-mouth schematic. */
-function hatchPattern(ctx,alpha){
+const hatchTile=(()=>{
   const c=document.createElement('canvas'); c.width=c.height=14;
   const x=c.getContext('2d');
-  x.strokeStyle='rgba(255,255,255,'+alpha+')'; x.lineWidth=2.5; x.lineCap='square';
+  x.strokeStyle='rgba(255,255,255,0.55)'; x.lineWidth=2.5; x.lineCap='square';
   for(let o=-14;o<=14;o+=7){ x.beginPath(); x.moveTo(o,14); x.lineTo(o+14,0); x.stroke(); }
-  return ctx.createPattern(c,'repeat');
-}
+  return c;
+})();
+// The tile is drawn once; only the pattern wrapper is per-draw, because the
+// billboard canvas is reallocated when the viewport changes.
+function hatchPattern(ctx){ return ctx.createPattern(hatchTile,'repeat'); }
 const HALF = GOAL_W / 2;              // 1.83
 const CIRCLE_R = 14.63;              // shooting circle radius from each post
 const OUTER_R = CIRCLE_R + 5;        // dashed line 5 m outside
@@ -530,7 +548,7 @@ function sizeBillboardCanvas(){
   // rebuild the texture at the floor, then rebuild it again a frame later.
   if(!window.innerHeight) return;
   const px=Math.min(devicePixelRatio||1,2);
-  const onScreen=bbHeightFactor()/(2*Math.tan(camera.fov*Math.PI/360));   // sprite height as a fraction of the viewport
+  const onScreen=bbHeightFactor()/fovSpan();          // sprite height as a fraction of the viewport
   // The sprite holds a constant angular size, so its on-screen size does not
   // change with zoom and 1:1 stays 1:1 -- no need to supersample for motion.
   // Quantised to a multiple of 8 so the canvas only ever takes a handful of
@@ -557,13 +575,7 @@ billboard.position.set(0,3.2,0); scene.add(billboard);
 /*  Live geometry overlay group                                        */
 /* ------------------------------------------------------------------ */
 const viz = new THREE.Group(); scene.add(viz);
-function clearViz(){
-  for(let i=viz.children.length-1;i>=0;i--){
-    const o=viz.children[i]; viz.remove(o);
-    if(o.geometry) o.geometry.dispose();
-    if(o.material) o.material.dispose();
-  }
-}
+function clearViz(){ disposeChildren(viz); }
 const v3 = (v2,y)=>new THREE.Vector3(v2.x, y||0, v2.y);           // ground Vector2 -> Vector3
 function tri(a,b,c,color,op){
   const g=new THREE.BufferGeometry();
@@ -572,11 +584,9 @@ function tri(a,b,c,color,op){
 }
 function seg(x0,x1,color,y,hatched){ // thick box on the goal line
   const w=Math.max(0.0001,x1-x0);
-  const mat=hatched
-    ? new THREE.MeshBasicMaterial({color, map:hatchTex.clone()})
-    : new THREE.MeshBasicMaterial({color});
-  if(hatched){ mat.map.needsUpdate=true; mat.map.repeat.set(Math.max(1,w*6),1); }
-  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.09,0.09), mat);
+  const g=new THREE.BoxGeometry(w,0.09,0.09);
+  if(hatched) scaleUV(g, Math.max(1,w*6), 1);
+  const m=new THREE.Mesh(g, new THREE.MeshBasicMaterial(hatched?{color, map:hatchTex}:{color}));
   m.position.set((x0+x1)/2, (y||0.09), 0); return m;
 }
 function polyline(pts,color,dashed){ const l=lineFromPts(pts,color,dashed); return l; }
@@ -597,17 +607,6 @@ function keeperOnBisector(B,d){
   const dd=Math.min(d, B.y-0.3);
   const t=(dd - B.y)/bis.y;
   return B.clone().add(bis.clone().multiplyScalar(t));
-}
-function coverageAt(B,K,kw){ // -> {pct, left gap, right gap} at the goal line
-  const dir=B.clone().sub(K).normalize();
-  const perp=new THREE.Vector2(-dir.y, dir.x);
-  const E1=K.clone().add(perp.clone().multiplyScalar(kw/2));
-  const E2=K.clone().add(perp.clone().multiplyScalar(-kw/2));
-  const xa=projToLine(B,E1), xb=projToLine(B,E2);
-  if(xa===null||xb===null) return {pct:0,left:GOAL_W,right:0};
-  const covL=Math.max(-HALF,Math.min(xa,xb)), covR=Math.min(HALF,Math.max(xa,xb));
-  const cw=Math.max(0,covR-covL);
-  return {pct:cw/GOAL_W*100, left:Math.max(0,covL+HALF), right:Math.max(0,HALF-covR)};
 }
 function shadowSpan(B,K,kw){ // unclamped shadow edges on the goal line: [min,max]
   const dir=B.clone().sub(K).normalize();
@@ -690,9 +689,9 @@ function openFaceMesh(coveredPoly,z,color,op){
     h.closePath(); sh.holes.push(h);
   }
   const g=new THREE.ShapeGeometry(sh); g.translate(0,0,z);
-  const t=hatchTex.clone(); t.needsUpdate=true; t.repeat.set(2.6,2.6);
+  scaleUV(g, 2.6, 2.6);          // ShapeGeometry's UVs are the shape's own metres
   return new THREE.Mesh(g,new THREE.MeshBasicMaterial({
-    color, map:t, transparent:true, opacity:op, side:THREE.DoubleSide, depthWrite:false}));
+    color, map:hatchTex, transparent:true, opacity:op, side:THREE.DoubleSide, depthWrite:false}));
 }
 function faceMesh(pts,z,color,op){                      // filled polygon on the goal plane (handles non-convex)
   if(pts.length<3) return null;
@@ -721,7 +720,12 @@ function faceAngle(d){ return Math.atan2(-d.x,-d.y); }  // rotate slab so its wi
 function disposeChildren(gr,keep){
   for(let i=gr.children.length-1;i>=0;i--){ const o=gr.children[i]; gr.remove(o);
     if(o.geometry) o.geometry.dispose();
-    if(o.material && (!keep||keep.indexOf(o.material)<0)) o.material.dispose(); }
+    if(o.material && (!keep||keep.indexOf(o.material)<0)){
+      // A map the mesh owns goes with it; shared ones are flagged and outlive it.
+      const m=o.material.map;
+      if(m && !SHARED_TEX.has(m)) m.dispose();
+      o.material.dispose();
+    } }
 }
 let keeperSig='';                                       // rebuild keeper mesh only when silhouette changes
 function ensureKeeperMesh(poly){
@@ -800,7 +804,7 @@ function drawBillboard(d){
   c.fillStyle=PAL().openFill; c.fillRect(sx,sy,sw,sh);
   // Hatch the whole mouth, then paint the covered region over it: open net
   // ends up striped, covered stays flat, so the two separate without colour.
-  c.save(); c.fillStyle=hatchPattern(c,0.55); c.fillRect(sx,sy,sw,sh); c.restore();
+  c.save(); c.fillStyle=hatchPattern(c); c.fillRect(sx,sy,sw,sh); c.restore();
   c.fillStyle=PAL().coveredFill;
   if(d.facePoly && d.facePoly.length>=3){
     c.beginPath(); d.facePoly.forEach((p,i)=>{ const X=mapx(p[0]),Y=mapy(p[1]); i?c.lineTo(X,Y):c.moveTo(X,Y); }); c.closePath(); c.fill();
@@ -982,6 +986,9 @@ let lastState=null;
 /* ------------------------------------------------------------------ */
 /*  Custom orbit camera (no OrbitControls in r128)                     */
 /* ------------------------------------------------------------------ */
+/* Vertical extent the camera spans at unit distance: an object h tall at
+   distance d fills h/(d*fovSpan()) of the viewport height. */
+const fovSpan=()=>2*Math.tan(camera.fov*Math.PI/360);
 const cam={target:new THREE.Vector3(0,1.0,6), radius:20, theta:0, phi:1.02};
 const deg=r=>r*180/Math.PI, rad=d=>d*Math.PI/180;
 let camFromUrl=false;
@@ -1354,7 +1361,7 @@ function applyViewShift(){
   const blocked=controlsPanel.classList.contains('collapsed') ? 0 : controlsPanel.getBoundingClientRect().right;
   const free=Math.max(60, vw-blocked-2*M);
   // On-screen width of the panel per unit of height factor.
-  const perFactor=vh*BB_ASPECT/(2*Math.tan(camera.fov*Math.PI/360));
+  const perFactor=vh*BB_ASPECT/fovSpan();
   // Shrink rather than let it run under the controls or off the right edge.
   // Collapsing the controls frees the space again and it returns to full size.
   // The 0.92 is slack: the sprite is sized off its anchor's distance but drawn
@@ -1434,9 +1441,10 @@ update();
 
 /* keep the billboard a constant on-screen size, and hide the side readout while the goal is in view */
 let readoutHidden=null;
-function goalOnScreen(){ const p=billboard.position.clone().project(camera); return p.z<1 && p.x>-1.05 && p.x<1.05 && p.y>-1.05 && p.y<1.05; }
+const _proj=new THREE.Vector3(), oBillboardEl=el('oBillboard');   // reused every frame
+function goalOnScreen(){ const p=_proj.copy(billboard.position).project(camera); return p.z<1 && p.x>-1.05 && p.x<1.05 && p.y>-1.05 && p.y<1.05; }
 function refreshReadout(){
-  const hide = el('oBillboard').checked && goalOnScreen();
+  const hide = oBillboardEl.checked && goalOnScreen();
   if(hide!==readoutHidden){ el('readout').style.display = hide?'none':''; readoutHidden=hide; }
 }
 const BB_ANCHOR=new THREE.Vector3(0, GOAL_H+0.3, 0);   // bottom of billboard sits here, above the crossbar
