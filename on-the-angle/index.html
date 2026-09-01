@@ -243,7 +243,7 @@
   <div class="group">
     <div class="glabel">Share</div>
     <button id="copyBtn" style="width:100%">Copy link</button>
-    <a href="https://github.com/BWeesy/gubbins/issues/new?template=on_the_angle_bug.yml" target="_blank" rel="noopener" id="bugLink">Something look wrong? Report it</a>
+    <a href="" target="_blank" rel="noopener" id="bugLink">Something look wrong? Report it</a>
     <a href="https://ko-fi.com/bweesy" target="_blank" rel="noopener" id="supportLink">Free for keepers everywhere — if it helped, ☕ buy me a coffee</a>
   </div>
   </div>
@@ -281,6 +281,17 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 "use strict";
+/* Bug reports go to a Google Form, not GitHub issues: filing an issue needs a
+   GitHub account, and no keeper at the club has one. The form takes anonymous
+   responses -- email collection, response limits and file-upload questions are
+   all off, since any one of them puts a Google sign-in back in the way.
+
+   Declared first so the CDN-failure notice below can use it: if three.js has
+   not loaded, reporting that is the only thing the page can still do. */
+const REPORT_FORM='https://docs.google.com/forms/d/e/1FAIpQLSfEaIkTozEvT8PLkXJcbsDMC1CBBzuoUfsBQo7sFXmFNU-QEw/viewform';
+const REPORT_SHARE_FIELD='entry.590037182';      // "Share link"
+const REPORT_DEVICE_FIELD='entry.2092487520';    // "Device and browser"
+
 /* three.js comes from a CDN, so a blocked network (club or school wifi often
    blocks CDNs) leaves an unexplained black screen. Say what happened instead.
    Not vendored: it is ~600KB against a page that is otherwise 60KB. */
@@ -294,7 +305,7 @@ if(typeof THREE==='undefined'){
     '<p style="margin:0 0 10px;color:#8ea6b6;font-size:12.5px">It is fetched from cdnjs.cloudflare.com. '+
     'A network that blocks CDNs (club or school wifi often does), an ad blocker, or being offline will all do this.</p>'+
     '<p style="margin:0;font-size:12.5px"><a href="" onclick="location.reload();return false" style="color:#37d6c6">Try again</a>'+
-    ' &nbsp;·&nbsp; <a href="https://github.com/BWeesy/gubbins/issues/new?template=on_the_angle_bug.yml" '+
+    ' &nbsp;·&nbsp; <a href="'+REPORT_FORM+'" target="_blank" rel="noopener" '+
     'style="color:#37d6c6">report it</a></p></div></div>';
   document.querySelectorAll('.panel,#corner').forEach(e=>e.style.display='none');
   throw new Error('three.js failed to load');
@@ -1167,11 +1178,10 @@ function setPalette(p){
 }
 /* Prefill the report with the exact scene. The share link carries ball,
    keeper, camera and every setting, which beats any description of them. */
-el('bugLink').addEventListener('click',function(){
-  writeUrl();
-  // Renderer details as well as the browser string: the panel has now been
-  // misreported twice on hardware none of us can reproduce on, and guessing
-  // from a screenshot cost two wrong fixes.
+/* Renderer details as well as the browser string: the stats panel has now been
+   misreported three times on hardware none of us can reproduce on, and guessing
+   from a screenshot cost two wrong fixes. */
+function deviceString(){
   let gpu='';
   try{
     const gl=renderer.getContext();
@@ -1181,12 +1191,19 @@ el('bugLink').addEventListener('click',function(){
         ', maxtex '+gl.getParameter(gl.MAX_TEXTURE_SIZE)+
         ', panel '+bbCanvas.width+'x'+bbCanvas.height;
   }catch(e){ gpu=' -- renderer details unavailable'; }
-  const q=new URLSearchParams({template:'on_the_angle_bug.yml',
-    device:navigator.userAgent+' -- '+innerWidth+'x'+innerHeight+' at '+(devicePixelRatio||1)+'x'+gpu});
+  return navigator.userAgent+' -- '+innerWidth+'x'+innerHeight+' at '+(devicePixelRatio||1)+'x'+gpu;
+}
+// A working link before anything is clicked, so a failure in the handler below
+// leaves the plain form rather than a dead anchor.
+el('bugLink').href=REPORT_FORM;
+el('bugLink').addEventListener('click',function(){
+  writeUrl();
+  const q=new URLSearchParams({usp:'pp_url'});
+  q.set(REPORT_DEVICE_FIELD, deviceString());
   // Only a real hosted URL is worth carrying: opened from a file, or as a
   // data: document, location.href is either useless or enormous.
-  if(/^https?:/.test(location.href) && location.href.length<1500) q.set('share_link',location.href);
-  this.href='https://github.com/BWeesy/gubbins/issues/new?'+q.toString();
+  if(/^https?:/.test(location.href) && location.href.length<1500) q.set(REPORT_SHARE_FIELD,location.href);
+  this.href=REPORT_FORM+'?'+q.toString();
 });
 
 el('palBtn').addEventListener('click',()=>setPalette(palette==='safe'?'classic':'safe'));
