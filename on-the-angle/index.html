@@ -514,19 +514,31 @@ const passGroup = new THREE.Group(); scene.add(passGroup);
 const heatGroup = new THREE.Group(); scene.add(heatGroup);
 
 /* floating stats billboard over the goal (canvas texture on a camera-facing sprite) */
-/* Drawn in a fixed 480x420 design space, but rasterised at whatever the sprite
-   actually occupies on screen. That sizing is what keeps the text crisp: the
-   texture is non-power-of-two, so three cannot mipmap it, and any minification
-   lands straight on the aliasing this panel used to show on a large window. */
+/* Drawn in a 480x420 design space onto a fixed 512x512 canvas.
+
+   Power of two, so WebGL1 will mipmap it. Minification is then filtered
+   properly at every size, which is what kills the aliasing this panel showed
+   on a large window -- rather than only where the texture happens to match the
+   sprite, which is what sizing the canvas to the sprite was buying.
+
+   Never resized, because that sizing is what broke it on a Samsung Galaxy:
+   correct on every viewport and pixel ratio available here, stretched with the
+   left half missing there, and two attempts at fixing it in place failed.
+   Resizing a live canvas under a texture was the only thing that phone did
+   differently, so it is gone.
+
+   512 holds the 480-wide design at 1.07x, leaving 64px of transparent padding
+   above it so the card sits flush with the bottom of the square sprite. */
 const BB_W=480, BB_H=420, BB_ASPECT=BB_W/BB_H;
-const bbCanvas=document.createElement('canvas'); bbCanvas.width=BB_W; bbCanvas.height=BB_H;
+const BB_TEX=512;                            // power of two, for mipmaps
+const BB_SCALE=BB_TEX/BB_W;                  // 1.0667
+const BB_PAD=BB_TEX-BB_H*BB_SCALE;           // 64px of empty above the card
+const BB_CARD_FRAC=(BB_TEX-BB_PAD)/BB_TEX;   // card height as a fraction of the sprite
+const bbCanvas=document.createElement('canvas'); bbCanvas.width=bbCanvas.height=BB_TEX;
 const bbCtx=bbCanvas.getContext('2d');
-function makeBillboardTexture(){
-  const t=new THREE.CanvasTexture(bbCanvas);
-  t.minFilter=THREE.LinearFilter; t.magFilter=THREE.LinearFilter; t.generateMipmaps=false;
-  return t;
-}
-let bbTex=makeBillboardTexture();
+const bbTex=new THREE.CanvasTexture(bbCanvas);
+bbTex.minFilter=THREE.LinearMipmapLinearFilter; bbTex.magFilter=THREE.LinearFilter;
+bbTex.generateMipmaps=true;
 
 /* How tall the panel is, as a fraction of the viewport. layoutBillboard() sets
    it; the render loop and the canvas sizing read it. */
@@ -543,31 +555,6 @@ function bbDesiredFactor(){
 }
 /* Match the canvas to the sprite's on-screen device pixels, so the texture is
    sampled at about 1:1 rather than minified. */
-function sizeBillboardCanvas(){
-  // A viewport that has not been laid out yet reports 0. Sizing off that would
-  // rebuild the texture at the floor, then rebuild it again a frame later.
-  if(!window.innerHeight) return;
-  const px=Math.min(devicePixelRatio||1,2);
-  const onScreen=bbHeightFactor()/fovSpan();          // sprite height as a fraction of the viewport
-  // The sprite holds a constant angular size, so its on-screen size does not
-  // change with zoom and 1:1 stays 1:1 -- no need to supersample for motion.
-  // Quantised to a multiple of 8 so the canvas only ever takes a handful of
-  // distinct sizes. The floor is deliberately low: on a short viewport (a phone
-  // in landscape) the sprite is only ~50px tall, and a larger floor would put
-  // the texture back into minification -- the aliasing this all exists to fix.
-  const want=Math.max(64,Math.min(1024,Math.round(onScreen*window.innerHeight*px/8)*8));
-  if(want===bbCanvas.height) return;
-  bbCanvas.height=want; bbCanvas.width=Math.round(want*BB_ASPECT);
-  /* Rebuild the texture rather than leaving three to re-upload one whose canvas
-     changed size underneath it. Mutating a live CanvasTexture's dimensions is
-     the one device-dependent thing here: it renders fine on desktop but came
-     back vertically stretched, with streaked and missing text, on an Android
-     phone. A fresh texture forces a clean allocation on every driver. */
-  const old=bbTex;
-  bbTex=makeBillboardTexture();
-  billboard.material.map=bbTex; billboard.material.needsUpdate=true;
-  old.dispose();
-}
 const billboard=new THREE.Sprite(new THREE.SpriteMaterial({map:bbTex, transparent:true, depthTest:true, depthWrite:false}));
 billboard.position.set(0,3.2,0); scene.add(billboard);
 
@@ -780,15 +767,13 @@ function computeHeatmap(){
 
 /* ---- floating stats billboard ---- */
 function roundRectPath(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
-let lastBB=null;
 function drawBillboard(d){
-  lastBB=d;
-  sizeBillboardCanvas();
-  // Everything below is written in the 480x420 design space; the transform maps
-  // it onto whatever the canvas is currently sized to.
+  // Everything below is written in the 480x420 design space; one uniform
+  // transform maps it onto the fixed canvas, shifted down so the card sits at
+  // the bottom of the square and the padding lands above it.
   const c=bbCtx, W=BB_W, H=BB_H;
-  c.setTransform(bbCanvas.width/BB_W,0,0,bbCanvas.height/BB_H,0,0);
-  c.clearRect(0,0,W,H);
+  c.setTransform(BB_SCALE,0,0,BB_SCALE,0,BB_PAD);
+  c.clearRect(0,-BB_PAD/BB_SCALE,W,H+BB_PAD/BB_SCALE);
   roundRectPath(c,6,6,W-12,H-12,26); c.fillStyle='rgba(14,22,36,0.92)'; c.fill();
   c.lineWidth=2; c.strokeStyle='rgba(120,150,180,0.35)'; c.stroke();
   c.textBaseline='top';
@@ -1184,8 +1169,20 @@ function setPalette(p){
    keeper, camera and every setting, which beats any description of them. */
 el('bugLink').addEventListener('click',function(){
   writeUrl();
+  // Renderer details as well as the browser string: the panel has now been
+  // misreported twice on hardware none of us can reproduce on, and guessing
+  // from a screenshot cost two wrong fixes.
+  let gpu='';
+  try{
+    const gl=renderer.getContext();
+    const dbg=gl.getExtension('WEBGL_debug_renderer_info');
+    gpu=' -- '+(dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):'renderer hidden')+
+        ', webgl'+(gl instanceof WebGLRenderingContext?'1':'2')+
+        ', maxtex '+gl.getParameter(gl.MAX_TEXTURE_SIZE)+
+        ', panel '+bbCanvas.width+'x'+bbCanvas.height;
+  }catch(e){ gpu=' -- renderer details unavailable'; }
   const q=new URLSearchParams({template:'on_the_angle_bug.yml',
-    device:navigator.userAgent+' -- '+innerWidth+'x'+innerHeight+' at '+(devicePixelRatio||1)+'x'});
+    device:navigator.userAgent+' -- '+innerWidth+'x'+innerHeight+' at '+(devicePixelRatio||1)+'x'+gpu});
   // Only a real hosted URL is worth carrying: opened from a file, or as a
   // data: document, location.href is either useless or enormous.
   if(/^https?:/.test(location.href) && location.href.length<1500) q.set('share_link',location.href);
@@ -1412,9 +1409,6 @@ function setCollapsed(c){
   b.title=c?'Expand panel':'Collapse panel';
   fitControlsToViewport();
   applyViewShift();
-  // Collapsing frees horizontal space, so the panel's size and its texture
-  // resolution both change -- redraw rather than scale a stale texture up.
-  if(lastBB) drawBillboard(lastBB);
 }
 el('ctlHeader').addEventListener('click',()=>setCollapsed(!controlsPanel.classList.contains('collapsed')));
 /* A phone's toolbar sliding away resizes the visual viewport without firing a
@@ -1427,10 +1421,8 @@ addEventListener('resize',()=>{
   renderer.setSize(innerWidth,innerHeight);
   fitControlsToViewport();
   applyViewShift();
-  // Both the panel's size and its texture resolution follow the viewport, so a
-  // resize needs a redraw. Reuses the last payload rather than recomputing the
-  // geometry, which has not changed.
-  if(lastBB) drawBillboard(lastBB);
+  // The panel's on-screen size follows the viewport, but it is the sprite that
+  // is scaled for that, per frame. The texture is fixed, so no redraw here.
 });
 
 /* ------------------------------------------------------------------ */
@@ -1451,9 +1443,13 @@ const BB_ANCHOR=new THREE.Vector3(0, GOAL_H+0.3, 0);   // bottom of billboard si
 (function loop(){
   applyCam();
   if(billboard.visible){
+    // The sprite is square and the card fills its lower BB_CARD_FRAC, so the
+    // sprite is scaled up by that to leave the card itself h tall. Its width
+    // still works out at h*BB_ASPECT, which is what the fit logic assumes.
     const d=camera.position.distanceTo(BB_ANCHOR), h=bbHeightFactor()*d;
-    billboard.scale.set(h*BB_ASPECT, h, 1);
-    billboard.position.set(0, BB_ANCHOR.y + h/2, 0);
+    const s=h/BB_CARD_FRAC;
+    billboard.scale.set(s, s, 1);
+    billboard.position.set(0, BB_ANCHOR.y + s/2, 0);
   }
   refreshReadout();
   renderer.render(scene,camera);
