@@ -70,8 +70,11 @@
             text-transform:uppercase;color:var(--cyan);margin-bottom:calc(var(--u)*10)}
   #hudPct{font-size:calc(var(--u)*100);font-weight:700;color:var(--green);letter-spacing:-.02em}
   #hudGaps{text-align:left;flex:none}
-  #hudGaps .k{font-size:calc(var(--u)*20);color:var(--muted);margin-top:calc(var(--u)*6)}
-  #hudGaps .v{font-size:calc(var(--u)*34);font-weight:700;color:var(--ink)}
+  /* Sized up from 20/34, which landed at about 4.5px and 8px on a phone -- the
+     smallest text on the panel and the part people squint at. 44 is the ceiling:
+     at 46 the wider gap column squeezes "GOAL FACE COVERED" onto two lines. */
+  #hudGaps .k{font-size:calc(var(--u)*28);color:var(--muted);margin-top:calc(var(--u)*6)}
+  #hudGaps .v{font-size:calc(var(--u)*44);font-weight:700;color:var(--ink)}
   #hudGoal{display:block;width:calc(var(--u)*300);height:calc(var(--u)*175);margin:auto auto 0}
   #hudOpen{fill:var(--red)}
   #hudCovered{fill:var(--green)}
