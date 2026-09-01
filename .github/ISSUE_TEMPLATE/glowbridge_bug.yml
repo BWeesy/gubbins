@@ -4,18 +4,13 @@ labels: ["bug", "glowbridge"]
 body:
   - type: markdown
     attributes:
+      # One line per paragraph: "|" keeps newlines literally, and GitHub renders
+      # them as hard breaks, which left this text broken up mid-sentence (and
+      # split the Troubleshooting link across two lines).
       value: |
-        Before filing: **most "missing data" reports are the DCC pipeline, not
-        the bridge.** The [Troubleshooting
-        section](https://github.com/BWeesy/gubbins/blob/main/glowbridge/README.md#troubleshooting)
-        shows how to tell the difference in about a minute. If `last_success` is recent but
-        `data_complete_to` is hours behind, the bridge is working and the DCC is
-        behind — and nothing downstream can conjure data the DCC has not sent.
+        Before filing: **most "missing data" reports are the DCC pipeline, not the bridge.** The [Troubleshooting section](https://github.com/BWeesy/gubbins/blob/main/glowbridge/README.md#troubleshooting) shows how to tell the difference in about a minute. If `last_success` is recent but `data_complete_to` is hours behind, the bridge is working and the DCC is behind — and nothing downstream can conjure data the DCC has not sent.
 
-        **Debug output and `status.json` are safe to paste.** All log output
-        passes a redacting formatter (Bright password and HA token replaced
-        with `***`, even at debug level), and `status.json` holds no secrets.
-        **Do not paste `state.json`** — it contains your Glow auth token.
+        **Debug output and `status.json` are safe to paste.** All log output passes a redacting formatter (Bright password and HA token replaced with `***`, even at debug level), and `status.json` holds no secrets. **Do not paste `state.json`** — it contains your Glow auth token.
 
   - type: dropdown
     id: bright-app

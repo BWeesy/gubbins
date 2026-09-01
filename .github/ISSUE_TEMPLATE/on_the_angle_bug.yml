@@ -4,14 +4,12 @@ labels: ["bug", "on-the-angle"]
 body:
   - type: markdown
     attributes:
+      # One line per paragraph: "|" keeps newlines literally, and GitHub renders
+      # them as hard breaks, which left this text broken up mid-sentence.
       value: |
-        Thanks for reporting. The single most useful thing you can give us is
-        the **share link**, because it carries the exact scene — ball, keeper,
-        camera angle and all the settings — so we can reproduce what you were
-        looking at rather than guess.
+        Thanks for reporting. The single most useful thing you can give us is the share link, because it carries the exact scene — ball, keeper, camera angle and all the settings — so we can reproduce what you were looking at rather than guess.
 
-        If you followed the "Report a problem" link from the page itself, it is
-        already filled in below.
+        If you followed the "Report a problem" link from the page itself, it is already filled in below.
 
   - type: textarea
     id: what
@@ -35,10 +33,7 @@ body:
     id: device
     attributes:
       label: Device and browser
-      description: >-
-        Phone or laptop, and which browser. If the page filled this in for you,
-        it is your browser's user-agent string — trim anything you would rather
-        not post publicly.
+      description: Phone or laptop, and which browser. If the page filled this in for you, it is your browser's user-agent string — trim anything you would rather not post publicly.
       placeholder: iPhone 13, Safari
     validations:
       required: false
