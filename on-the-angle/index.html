@@ -169,28 +169,7 @@
   <p class="sub">Field-hockey shooting geometry. Drag to orbit · scroll to zoom · right-drag to pan.</p>
 
   <div class="group" style="border-top:none;padding-top:0;margin-top:0">
-    <div class="glabel">Coordinates</div>
-    <div class="seg">
-      <button id="coordCart" class="on">Cartesian</button>
-      <button id="coordPolar">Polar</button>
-    </div>
-    <p class="sub" style="margin:7px 0 0">Polar is from goal centre: θ = 0° straight out, ± to each side; r = distance from goal.</p>
-  </div>
-
-  <div class="group">
-    <div class="glabel">Scenarios</div>
-    <div class="seg wrap" id="scenSeg">
-      <button data-s="topD">Top of D</button>
-      <button data-s="tight">Tight</button>
-      <button data-s="stroke">Stroke</button>
-      <button data-s="pcflick">PC flick</button>
-      <button data-s="switch">Switch</button>
-      <button data-s="oneVone">1v1</button>
-    </div>
-  </div>
-
-  <div class="group">
-    <div class="glabel">Shot (ball)</div>
+    <div class="glabel">Click to place ball</div>
     <button id="placeBtn" style="width:100%;margin-bottom:8px">Place ball: off</button>
     <div id="ballCart">
       <div class="row"><label>Across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="bxVal"></span></div>
@@ -203,6 +182,16 @@
       <input class="slider" id="ba" type="range" min="-85" max="85" step="1" value="22">
       <div class="row"><label>Radius &nbsp;<span style="color:var(--muted)">r</span></label><span class="val" id="brVal"></span></div>
       <input class="slider" id="br" type="range" min="0.6" max="24" step="0.1" value="11.9">
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="glabel">Scenarios</div>
+    <div class="seg wrap" id="scenSeg">
+      <button data-s="topD">Top of D</button>
+      <button data-s="tight">Tight</button>
+      <button data-s="stroke">Stroke</button>
+      <button data-s="oneVone">1v1</button>
     </div>
   </div>
 
@@ -247,6 +236,15 @@
   </div>
 
   <div class="group">
+    <div class="glabel">Coordinates</div>
+    <div class="seg">
+      <button id="coordCart" class="on">Cartesian</button>
+      <button id="coordPolar">Polar</button>
+    </div>
+    <p class="sub" style="margin:7px 0 0">Polar is from goal centre: θ = 0° straight out, ± to each side; r = distance from goal.</p>
+  </div>
+
+  <div class="group">
     <div class="glabel">Coverage metric</div>
     <div class="seg" style="margin-bottom:9px">
       <button id="covGround">Ground</button>
@@ -261,18 +259,6 @@
     </div>
   </div>
 
-  <div class="group">
-    <div class="glabel">Pass-then-shoot</div>
-    <button id="passBtn" style="width:100%;margin-bottom:8px">Pass move: off</button>
-    <div id="passCtl" style="display:none">
-      <button id="passPlaceBtn" style="width:100%;margin-bottom:8px">Place passer: off</button>
-      <div class="row"><label>Across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="pxVal"></span></div>
-      <input class="slider" id="px" type="range" min="-14" max="14" step="0.1" value="-8">
-      <div class="row"><label>Depth &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="pzVal"></span></div>
-      <input class="slider" id="pz" type="range" min="0.6" max="24" step="0.1" value="6">
-      <p class="sub" style="margin:6px 0 0">Blue = passer. Ghost keeper = set for the pass; amber arrow = the move needed to cover the shot.</p>
-    </div>
-  </div>
 
   <div class="group">
     <div class="glabel">Overlays</div>
@@ -314,7 +300,6 @@
     <div class="stat"><span class="k">Goal angle at ball</span><span class="v" id="rGoal">–</span></div>
     <div class="stat"><span class="k">Off centre line</span><span class="v" id="rBias">–</span></div>
     <div class="stat"><span class="k">Ball → keeper</span><span class="v" id="rDist">–</span></div>
-    <div class="stat" id="rReposRow" style="display:none"><span class="k">Reposition (pass)</span><span class="v" id="rRepos">–</span></div>
   </div>
   <div class="cvNote" id="cvNote"></div>
 </div>
@@ -329,7 +314,6 @@
     <button data-v="plan">Plan</button>
     <button data-v="behind">Behind goal</button>
     <button data-v="atk">Attacker POV</button>
-    <button data-v="gk">Keeper POV</button>
   </div>
 </div>
 
@@ -560,14 +544,8 @@ scene.add(ball);
 // effectively invisible). A dark keeper fixes the pitch and vanishes into the
 // sky instead; only a light one clears both (2.55 on pitch, 11.9 on sky).
 const keeperMat = new THREE.MeshStandardMaterial({color:0xffe9c9, roughness:.7, side:THREE.DoubleSide});
-const ghostMat  = new THREE.MeshStandardMaterial({color:0x9fd0ff, roughness:.8, side:THREE.DoubleSide, transparent:true, opacity:0.34});
 const keeper = new THREE.Group(); scene.add(keeper);      // silhouette rebuilt each update
 
-// passer (pass-then-shoot) + its visuals group
-const passer = new THREE.Mesh(new THREE.SphereGeometry(BALL_R,18,14),
-  new THREE.MeshStandardMaterial({color:0x6fa8ff, roughness:.5, emissive:0x102438}));
-passer.visible=false; scene.add(passer);
-const passGroup = new THREE.Group(); scene.add(passGroup);
 const heatGroup = new THREE.Group(); scene.add(heatGroup);
 
 /* The stats panel is a DOM overlay -- see the note beside its markup. Only the
@@ -851,7 +829,7 @@ function placeHud(){
 /*  Update loop for state                                              */
 /* ------------------------------------------------------------------ */
 const el = id=>document.getElementById(id);
-let placeMode='', keeperMode='bis', priority='centre', coverageMode='face', posture='set', passOn=false;
+let placeMode='', keeperMode='bis', priority='centre', coverageMode='face', posture='set';
 
 function update(){
   const bx=+el('bx').value, bz=+el('bz').value, kw=+el('kw').value;
@@ -912,23 +890,6 @@ function update(){
   const useFace=(coverageMode==='face');
   const headPct=useFace?facePct:covPct;
 
-  /* ---- pass-then-shoot ---- */
-  disposeChildren(passGroup,[ghostMat]);
-  passer.visible=false;
-  let repos=null;
-  if(passOn){
-    const px=+el('px').value, pz=+el('pz').value;
-    passer.visible=true; passer.position.set(px,BALL_R,pz);
-    const Bp=new THREE.Vector2(px,pz);
-    const Kp=guidedKeeper(Bp, +el('off').value, priority, kw);   // keeper set for the pass
-    const dirp=Bp.clone().sub(Kp).normalize();
-    const ghost=silMesh(silhouette(kw,kh,'set').poly, ghostMat);
-    ghost.position.set(Kp.x,0,Kp.y); ghost.rotation.y=faceAngle(dirp);
-    passGroup.add(ghost);
-    repos=Kp.distanceTo(K);
-    passGroup.add(polyline([new THREE.Vector3(px,BALL_R,pz), new THREE.Vector3(bx,BALL_R,bz)],0x9fb3bd,true)); // pass line
-    passGroup.add(polyline([v3(Kp,0.05), v3(K,0.05)],0xffcf5c));  // reposition arrow
-  }
 
   /* ---- rebuild overlays ---- */
   clearViz();
@@ -979,8 +940,6 @@ function update(){
   el('offVal').textContent=(+el('off').value).toFixed(2)+' m';
   el('kxVal').textContent=(+el('kx').value).toFixed(2)+' m';
   el('kzVal').textContent=(+el('kz').value).toFixed(2)+' m';
-  el('pxVal').textContent=(+el('px').value).toFixed(1)+' m';
-  el('pzVal').textContent=(+el('pz').value).toFixed(1)+' m';
 
   el('rGoal').textContent=goalDeg.toFixed(1)+'°';
   el('rCov').textContent=headPct.toFixed(0)+'%';
@@ -994,8 +953,6 @@ function update(){
   el('rBias').textContent=Math.abs(biasDeg)<0.3?'on line'
       :(Math.abs(biasDeg).toFixed(1)+'° '+(biasDeg>0?'far':'near'));
   el('rDist').textContent=K.distanceTo(B).toFixed(2)+' m';
-  el('rReposRow').style.display = passOn?'flex':'none';
-  if(passOn && repos!=null) el('rRepos').textContent=repos.toFixed(2)+' m';
 
   // keep polar sliders + labels in step with the canonical cartesian values
   { const bp=cartToPolar(bx,bz);
@@ -1010,7 +967,7 @@ function update(){
   if(el('oBillboard').checked) drawBillboard({ metric: useFace?'Goal face':'Ground line', pct: headPct,
     nearGap, farGap, facePoly:(useFace&&face)?face.poly:null, covL, covR, coveredW });
 
-  lastState={bx,bz,K,dir};
+  lastState={bx,bz,K};   // dir went with the keeper-POV preset
   scheduleUrl();
 }
 let lastState=null;
@@ -1104,7 +1061,6 @@ function tryPlace(e){
   if(ray.ray.intersectPlane(ground,hit)){
     const cx=Math.max(-14,Math.min(14,hit.x));
     if(placeMode==='ball'){ el('bx').value=cx.toFixed(1); el('bz').value=Math.max(0.6,Math.min(20,hit.z)).toFixed(1); }
-    else if(placeMode==='passer'){ el('px').value=cx.toFixed(1); el('pz').value=Math.max(0.6,Math.min(24,hit.z)).toFixed(1); }
     else if(placeMode==='keeper'){ if(keeperMode!=='free') setMode('free'); el('kx').value=Math.max(-8,Math.min(8,hit.x)).toFixed(2); el('kz').value=Math.max(0.2,Math.min(12,hit.z)).toFixed(2); }
     update();
   }
@@ -1119,11 +1075,6 @@ function setView(v){
   else if(v==='behind'){ cam.target.set(0,1.0,3); cam.radius=13; cam.theta=Math.PI; cam.phi=1.0; }
   else if(v==='atk' && lastState){
     setFromPositionTarget(new THREE.Vector3(lastState.bx,0.55,lastState.bz), new THREE.Vector3(0,0.7,0));
-  }
-  else if(v==='gk' && lastState){
-    const d=lastState.dir; // toward ball (across,depth)
-    const pos=new THREE.Vector3(lastState.K.x + d.x*0.45, 1.62, lastState.K.y + d.y*0.45);
-    setFromPositionTarget(pos, new THREE.Vector3(lastState.bx,0.3,lastState.bz));
   }
 }
 function clearViewButtons(){ document.querySelectorAll('#views button').forEach(x=>x.classList.remove('on')); }
@@ -1150,13 +1101,10 @@ function setPlace(mode){
   placeMode=(placeMode===mode)?'':mode;
   el('placeBtn').classList.toggle('on',placeMode==='ball');
   el('placeBtn').textContent='Place ball: '+(placeMode==='ball'?'on':'off');
-  el('passPlaceBtn').classList.toggle('on',placeMode==='passer');
-  el('passPlaceBtn').textContent='Place passer: '+(placeMode==='passer'?'on':'off');
   el('keeperPlaceBtn').classList.toggle('on',placeMode==='keeper');
   el('keeperPlaceBtn').textContent='Place keeper: '+(placeMode==='keeper'?'on':'off');
 }
 el('placeBtn').addEventListener('click',()=>setPlace('ball'));
-el('passPlaceBtn').addEventListener('click',()=>setPlace('passer'));
 el('keeperPlaceBtn').addEventListener('click',()=>setPlace('keeper'));
 function setMode(m){
   if(m==='free' && lastState){                            // adopt the current keeper spot so it doesn't jump
@@ -1244,31 +1192,19 @@ el('bugLink').addEventListener('click',function(){
 
 el('palBtn').addEventListener('click',()=>setPalette(palette==='safe'?'classic':'safe'));
 
-function setPass(on){
-  passOn=on;
-  el('passBtn').textContent='Pass move: '+(on?'on':'off');
-  el('passBtn').classList.toggle('on',on);
-  el('passCtl').style.display=on?'block':'none';
-  update();
-}
-el('passBtn').addEventListener('click',()=>setPass(!passOn));
-['px','pz'].forEach(id=>el(id).addEventListener('input',update));
 
 /* ---- scenario presets ---- */
 const PRESETS={
-  topD:   {bx:0,  bz:14.6, km:'bis', pr:'centre', off:2.0, pass:0},
-  tight:  {bx:11, bz:1.6,  km:'bis', pr:'near',   off:1.0, pass:0},
-  stroke: {bx:0,  bz:6.4,  km:'bis', pr:'centre', off:0.0, pass:0},
-  pcflick:{bx:0,  bz:14.6, km:'bis', pr:'centre', off:1.0, pass:1, px:9,  pz:0.3},
-  switch: {bx:-6, bz:4.5,  km:'bis', pr:'near',   off:1.5, pass:1, px:10, pz:4.5},
-  oneVone:{bx:0,  bz:8.0,  km:'bis', pr:'centre', off:3.5, pass:0}
+  topD:   {bx:0,  bz:14.6, km:'bis', pr:'centre', off:2.0},
+  tight:  {bx:11, bz:1.6,  km:'bis', pr:'near',   off:1.0},
+  stroke: {bx:0,  bz:6.4,  km:'bis', pr:'centre', off:0.0},
+  oneVone:{bx:0,  bz:8.0,  km:'bis', pr:'centre', off:3.5}
 };
 function applyPreset(k){
   const p=PRESETS[k]; if(!p) return;
   el('bx').value=p.bx; el('bz').value=p.bz; el('off').value=p.off;
-  if('px'in p) el('px').value=p.px; if('pz'in p) el('pz').value=p.pz;
-  keeperMode=p.km; priority=p.pr; passOn=!!p.pass;
-  setMode(keeperMode); setPriority(priority); setPass(passOn);
+  keeperMode=p.km; priority=p.pr;
+  setMode(keeperMode); setPriority(priority);
   update();
 }
 document.querySelectorAll('#scenSeg button').forEach(b=>b.addEventListener('click',()=>applyPreset(b.dataset.s)));
@@ -1325,7 +1261,7 @@ function serialise(){
   const ov=(el('oCone').checked?1:0)|(el('oBis').checked?2:0)|(el('oCover').checked?4:0)|(el('oPyr').checked?8:0)|(el('oGrid').checked?16:0)|(el('oBillboard').checked?32:0);
   return { bx:+el('bx').value, bz:+el('bz').value, km:keeperMode, pr:priority, off:+el('off').value,
     kx:+el('kx').value, kz:+el('kz').value, kw:+el('kw').value, kh:+el('kh').value, om:+el('offMax').value,
-    cov:coverageMode, po:posture, cm:coordMode, ps:passOn?1:0, px:+el('px').value, pz:+el('pz').value, ov, pal:palette,
+    cov:coverageMode, po:posture, cm:coordMode, ov, pal:palette,
     // Camera as one field rather than six: the hash stays readable and parses
     // in a single step. "~" survives encodeURIComponent untouched; "," does not.
     cam:[cam.target.x.toFixed(2),cam.target.y.toFixed(2),cam.target.z.toFixed(2),
@@ -1343,7 +1279,7 @@ function readUrl(){
   const p={}; location.hash.slice(1).split('&').forEach(kv=>{const i=kv.indexOf('='); if(i>0) p[kv.slice(0,i)]=decodeURIComponent(kv.slice(i+1));});
   const setv=(id,v)=>{ if(v!==undefined&&v!=='') el(id).value=v; };
   setv('bx',p.bx); setv('bz',p.bz); setv('off',p.off); setv('kx',p.kx); setv('kz',p.kz);
-  setv('kw',p.kw); setv('kh',p.kh); setv('offMax',p.om); setv('px',p.px); setv('pz',p.pz);
+  setv('kw',p.kw); setv('kh',p.kh); setv('offMax',p.om);
   // Read the ceiling back off the slider, which has already clamped the URL
   // value to its own min/max. Using the raw field let "#om=abc" through as
   // max="NaN", and "#om=-5" as a max below the slider's own min.
@@ -1358,7 +1294,6 @@ function readUrl(){
   if(p.pr) priority=p.pr;
   if(p.cov) coverageMode=p.cov;
   if(p.po) posture=(p.po==='spread'?'spread':'set');
-  if(p.ps!==undefined) passOn=(p.ps==='1');
   if(p.cam){
     const c=p.cam.split('~').map(Number);
     if(c.length===6&&c.every(Number.isFinite)){
@@ -1389,7 +1324,6 @@ function initFromUrl(){
   setPriority(priority);
   setCoverageMode(coverageMode);
   setPosture(posture);
-  setPass(passOn);
   grid.visible=el('oGrid').checked;
   hudVisible=el('oBillboard').checked;
 }
