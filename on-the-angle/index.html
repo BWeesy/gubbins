@@ -103,6 +103,7 @@
   #bugLink:hover{color:var(--cyan)}
   #supportLink{display:block;margin-top:9px;font-size:11.5px;color:var(--muted);text-align:center;text-decoration:none;line-height:1.4}
   #supportLink:hover{color:var(--cyan)}
+  .chart{width:100%;height:auto;display:block;background:rgba(0,0,0,.22);border:1px solid var(--edge);border-radius:6px}
   .chk{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:12px;cursor:pointer;user-select:none}
   .chk input{accent-color:var(--cyan);width:15px;height:15px}
 
@@ -262,6 +263,18 @@
     </div>
   </div>
 
+
+  <div class="group">
+    <div class="glabel">Save probability</div>
+    <button id="reachBtn" style="width:100%" aria-pressed="false">Reach model: off</button>
+    <div id="reachCtl" style="display:none">
+      <p class="sub" style="margin:8px 0 4px">Reach against time. Flat until the keeper reacts, then accelerating, then committed.</p>
+      <svg id="reachChart" viewBox="0 0 200 92" class="chart"></svg>
+      <p class="sub" style="margin:8px 0 4px" id="probCap">Chance of a save against how far it is out of reach.</p>
+      <svg id="probChart" viewBox="0 0 200 92" class="chart"></svg>
+      <div id="reachSliders"></div>
+    </div>
+  </div>
 
   <div class="group">
     <div class="glabel">Overlays</div>
@@ -1133,6 +1146,11 @@ function update(){
     nearGap, farGap, facePoly:(useFace&&face)?face.poly:null, covL, covR, coveredW });
 
   lastState={bx,bz,K};   // dir went with the keeper-POV preset
+  // Time the ball takes to reach the keeper, not the goal line: that is the
+  // window they actually have, and using the goal line would hand them time
+  // they do not get -- worst exactly where it matters, on close-range shots.
+  lastFlightTime=B.distanceTo(K)/REACH.bs;
+  if(reachOn) drawReachCharts();
   scheduleUrl();
 }
 let lastState=null;
@@ -1421,12 +1439,157 @@ el('coordPolar').addEventListener('click',()=>setCoord('polar'));
 ['ba','br'].forEach(id=>el(id).addEventListener('input',ballFromPolar));
 ['ka','kr'].forEach(id=>el(id).addEventListener('input',keeperFromPolar));
 
+
+/* ------------------------------------------------------------------ */
+/*  Reach and save probability                                         */
+/*                                                                     */
+/*  Everything the keeper can still do after the ball is struck. The    */
+/*  silhouette above is what they block standing still; this is what    */
+/*  they can get to by moving, and how likely it is to come off.        */
+/*                                                                     */
+/*  Spec-driven rather than nine near-identical blocks of markup: the   */
+/*  slider, its default, its bounds and its share-link key all live in  */
+/*  one row, so adding a parameter cannot leave them out of step.       */
+/* ------------------------------------------------------------------ */
+const REACH_PARAMS=[
+  {k:'bs', id:'rBs', label:'Ball speed',    unit:'m/s', min:10,   max:35,  step:0.5,  def:22,
+   note:'drag flicks measure 18-28 m/s'},
+  {k:'rt', id:'rRt', label:'Reaction',      unit:'s',   min:0.10, max:0.45,step:0.01, def:0.25,
+   note:'experienced keepers 250-260 ms'},
+  {k:'vm', id:'rVm', label:'Top speed',     unit:'m/s', min:0.5,  max:5,   step:0.1,  def:2.0},
+  {k:'ac', id:'rAc', label:'Acceleration',  unit:'m/s2',min:2,    max:25,  step:0.5,  def:8},
+  {k:'tc', id:'rTc', label:'Commit after',  unit:'s',   min:0.05, max:0.60,step:0.01, def:0.25},
+  {k:'vd', id:'rVd', label:'Dive speed',    unit:'m/s', min:1,    max:6,   step:0.1,  def:3.0},
+  {k:'cm', id:'rCm', label:'Commit penalty',unit:'',    min:0.3,  max:1,   step:0.05, def:0.85},
+  {k:'ku', id:'rKu', label:'Reach up',      unit:'x',   min:0.2,  max:1.5, step:0.05, def:0.6},
+  {k:'kd', id:'rKd', label:'Reach down',    unit:'x',   min:0.2,  max:2,   step:0.05, def:1.15},
+  {k:'sw', id:'rSw', label:'Sloppiness',    unit:'m',   min:0.01, max:0.6, step:0.01, def:0.15}
+];
+const REACH={};
+REACH_PARAMS.forEach(p=>REACH[p.k]=p.def);
+let reachOn=false, reachFromUrl=false;
+
+/* Metres the contact surface can travel in t seconds. Nothing until the
+   keeper has reacted, then accelerating up to a top speed, then -- past
+   REACH.tc -- committing to a dive that goes further but cannot be recalled. */
+function reachAt(t){
+  const m=t-REACH.rt; if(m<=0) return 0;
+  const tAcc=REACH.vm/REACH.ac;
+  const stable=s=>s<=tAcc ? 0.5*REACH.ac*s*s : REACH.vm*(s-tAcc/2);
+  if(m<=REACH.tc) return stable(m);
+  return stable(REACH.tc) + REACH.vd*(m-REACH.tc);
+}
+/* The part of that reach the keeper can make without committing. */
+function extendAt(t){
+  const m=Math.min(t-REACH.rt, REACH.tc); if(m<=0) return 0;
+  const tAcc=REACH.vm/REACH.ac;
+  return m<=tAcc ? 0.5*REACH.ac*m*m : REACH.vm*(m-tAcc/2);
+}
+/* Reach is not the same in every direction, so the distance is measured in a
+   scaled metric rather than the curve being made direction-dependent: the two
+   are equivalent for an elliptical envelope, and scaling the metric means the
+   point-to-polygon distance code needs no angular special-casing. Sideways is
+   the reference; down is cheaper than up, so they get separate scales and the
+   envelope is two half-ellipses joined at the horizontal. */
+function scaledGap(dx,dy){
+  const kv = dy>0 ? REACH.ku : REACH.kd;
+  return Math.hypot(dx, dy/kv*1);            // lateral is the 1.0 reference
+}
+/* Probability of getting something on it, given the gap to close and the time
+   to close it. Flat at 1 while the ball is inside what the keeper already
+   blocks or can certainly reach, then a Gaussian shoulder of width REACH.sw.
+   As sw goes to zero this collapses to the binary covered/open the page shows
+   today, which is the regression test for the whole model. */
+function saveProb(gap,t){
+  if(gap<=0) return 1;
+  const R=reachAt(t), over=Math.max(0,gap-R);
+  const p=Math.exp(-(over*over)/(2*REACH.sw*REACH.sw));
+  return gap<=extendAt(t) ? p : p*REACH.cm;
+}
+
+/* ---- the sliders, built from the spec ---- */
+REACH_PARAMS.forEach(p=>{
+  el('reachSliders').insertAdjacentHTML('beforeend',
+    '<div class="row"><label>'+p.label+'</label><span class="val" id="'+p.id+'Val"></span></div>'+
+    '<input class="slider" id="'+p.id+'" type="range" min="'+p.min+'" max="'+p.max+'" step="'+p.step+'" value="'+p.def+'">'+
+    (p.note?'<p class="sub" style="margin:-4px 0 6px">'+p.note+'</p>':''));
+});
+REACH_PARAMS.forEach(p=>el(p.id).addEventListener('input',()=>{
+  REACH[p.k]=+el(p.id).value; drawReachCharts(); update();
+}));
+
+/* ---- the charts -------------------------------------------------------
+   Two small plots of what the sliders are actually doing, because a curve
+   built from six interacting numbers is not something anyone can hold in
+   their head. Redrawn on every slider move, which is cheap: a couple of
+   hundred points of SVG path. */
+function chartPath(pts,x0,y0,w,h,xMax,yMax){
+  return pts.map((v,i)=>{
+    const X=x0+ (v[0]/xMax)*w, Y=y0+h-(Math.min(v[1],yMax)/yMax)*h;
+    return (i?'L':'M')+X.toFixed(1)+' '+Y.toFixed(1);
+  }).join(' ');
+}
+function axes(x0,y0,w,h,xLab,yLab){
+  return '<line x1="'+x0+'" y1="'+(y0+h)+'" x2="'+(x0+w)+'" y2="'+(y0+h)+'" stroke="#4a6472"/>'+
+         '<line x1="'+x0+'" y1="'+y0+'" x2="'+x0+'" y2="'+(y0+h)+'" stroke="#4a6472"/>'+
+         '<text x="'+(x0+w)+'" y="'+(y0+h+9)+'" fill="#8ea6b6" font-size="8" text-anchor="end">'+xLab+'</text>'+
+         '<text x="'+x0+'" y="'+(y0-2)+'" fill="#8ea6b6" font-size="8">'+yLab+'</text>';
+}
+function drawReachCharts(){
+  if(!reachOn) return;
+  const X0=22, Y0=12, W=170, H=64;
+
+  // reach against time, with the reaction dead zone and the commit point marked
+  const tMax=1.0, rMax=Math.max(0.6, reachAt(tMax));
+  const pts=[]; for(let i=0;i<=120;i++){ const t=tMax*i/120; pts.push([t,reachAt(t)]); }
+  const commitT=REACH.rt+REACH.tc;
+  const xAt=t=>X0+(t/tMax)*W;
+  el('reachChart').innerHTML=
+    '<rect x="'+X0+'" y="'+Y0+'" width="'+((REACH.rt/tMax)*W).toFixed(1)+'" height="'+H+'" fill="rgba(255,107,107,.16)"/>'+
+    '<text x="'+(X0+3)+'" y="'+(Y0+9)+'" fill="#8ea6b6" font-size="7">reacting</text>'+
+    (commitT<tMax?'<line x1="'+xAt(commitT).toFixed(1)+'" y1="'+Y0+'" x2="'+xAt(commitT).toFixed(1)+'" y2="'+(Y0+H)+'" stroke="#ffcf5c" stroke-dasharray="3 3"/>'+
+      '<text x="'+(xAt(commitT)+3).toFixed(1)+'" y="'+(Y0+9)+'" fill="#ffcf5c" font-size="7">commit</text>':'')+
+    axes(X0,Y0,W,H,'1.0 s',rMax.toFixed(1)+' m')+
+    '<path d="'+chartPath(pts,X0,Y0,W,H,tMax,rMax)+'" fill="none" stroke="var(--cyan)" stroke-width="1.6"/>';
+
+  // save probability against how far the ball is beyond what is already blocked,
+  // at the flight time this shot actually gives
+  const t=lastFlightTime||0.5;
+  const gMax=Math.max(0.8, reachAt(t)+4*REACH.sw);
+  const pp=[]; for(let i=0;i<=120;i++){ const g=gMax*i/120; pp.push([g,saveProb(g,t)]); }
+  el('probCap').textContent='Chance of a save against gap to close, at '+(t*1000).toFixed(0)+' ms flight.';
+  el('probChart').innerHTML=
+    axes(X0,Y0,W,H,gMax.toFixed(1)+' m','1.0')+
+    '<line x1="'+xAt2(reachAt(t),gMax,X0,W).toFixed(1)+'" y1="'+Y0+'" x2="'+xAt2(reachAt(t),gMax,X0,W).toFixed(1)+'" y2="'+(Y0+H)+'" stroke="#ffcf5c" stroke-dasharray="3 3"/>'+
+    '<text x="'+(xAt2(reachAt(t),gMax,X0,W)+3).toFixed(1)+'" y="'+(Y0+9)+'" fill="#ffcf5c" font-size="7">reach</text>'+
+    '<path d="'+chartPath(pp,X0,Y0,W,H,gMax,1)+'" fill="none" stroke="var(--green)" stroke-width="1.6"/>';
+
+  REACH_PARAMS.forEach(p=>{
+    el(p.id+'Val').textContent=(+el(p.id).value).toFixed(p.step<0.1?2:1)+(p.unit?' '+p.unit:'');
+  });
+}
+function xAt2(v,vMax,x0,w){ return x0+(Math.min(v,vMax)/vMax)*w; }
+let lastFlightTime=0;
+
+function setReach(on){
+  reachOn=on;
+  el('reachBtn').textContent='Reach model: '+(on?'on':'off');
+  el('reachBtn').classList.toggle('on',on);
+  el('reachBtn').setAttribute('aria-pressed',String(on));
+  el('reachCtl').style.display=on?'block':'none';
+  drawReachCharts(); update();
+}
+el('reachBtn').addEventListener('click',()=>setReach(!reachOn));
 /* ---- shareable URL state ---- */
 function serialise(){
   const ov=(el('oCone').checked?1:0)|(el('oBis').checked?2:0)|(el('oCover').checked?4:0)|(el('oPyr').checked?8:0)|(el('oGrid').checked?16:0)|(el('oBillboard').checked?32:0);
   return { bx:+el('bx').value, bz:+el('bz').value, km:keeperMode, pr:priority, off:+el('off').value,
     kx:+el('kx').value, kz:+el('kz').value, kw:+el('kw').value, kh:+el('kh').value, om:+el('offMax').value,
     cov:coverageMode, po:posture, cm:coordMode, ov, pal:palette,
+    // Reach parameters as one field, ordered by REACH_PARAMS, so a tuned model
+    // travels with the link. Absent on an older link, which falls back to the
+    // defaults exactly as pal did.
+    rch:reachOn?REACH_PARAMS.map(p=>REACH[p.k]).join('~'):'',
     // Camera as one field rather than six: the hash stays readable and parses
     // in a single step. "~" survives encodeURIComponent untouched; "," does not.
     cam:[cam.target.x.toFixed(2),cam.target.y.toFixed(2),cam.target.z.toFixed(2),
@@ -1454,6 +1617,13 @@ function readUrl(){
     el('offMaxVal').textContent=m.toFixed(1)+' m';
   }
   if(p.pal==='safe'||p.pal==='classic') palette=p.pal;
+  if(p.rch){
+    const v=p.rch.split('~').map(Number);
+    if(v.length===REACH_PARAMS.length && v.every(Number.isFinite)){
+      REACH_PARAMS.forEach((q,i)=>{ REACH[q.k]=Math.max(q.min,Math.min(q.max,v[i])); el(q.id).value=REACH[q.k]; });
+      reachFromUrl=true;
+    }
+  }
   if(p.cm) coordMode=p.cm;
   if(p.km) keeperMode=p.km;
   if(p.pr) priority=p.pr;
@@ -1482,6 +1652,7 @@ el('copyBtn').addEventListener('click',()=>{
 function initFromUrl(){
   readUrl();
   setPalette(palette);
+  setReach(reachFromUrl);
   // A link carrying its own camera is not sitting on the Default preset.
   if(camFromUrl) clearViewButtons();
   setCoord(coordMode);
