@@ -1507,7 +1507,8 @@ const REACH_PARAMS=[
   {k:'cm', id:'rCm', label:'Commit penalty',unit:'',    min:0.3,  max:1,   step:0.05, def:0.85},
   {k:'ku', id:'rKu', label:'Reach up',      unit:'x',   min:0.2,  max:1.5, step:0.05, def:0.6},
   {k:'kd', id:'rKd', label:'Reach down',    unit:'x',   min:0.2,  max:2,   step:0.05, def:1.15},
-  {k:'sw', id:'rSw', label:'Sloppiness',    unit:'m',   min:0.01, max:0.6, step:0.01, def:0.15}
+  {k:'pb', id:'rPb', label:'Prediction bonus',unit:'s',  min:0.01, max:0.35,step:0.01, def:0.10,
+   note:'time reading the shot is worth, give or take'}
 ];
 const REACH={};
 REACH_PARAMS.forEach(p=>REACH[p.k]=p.def);
@@ -1539,16 +1540,55 @@ function scaledGap(dx,dy){
   const kv = dy>0 ? REACH.ku : REACH.kd;
   return Math.hypot(dx, dy/kv*1);            // lateral is the 1.0 reference
 }
-/* Probability of getting something on it, given the gap to close and the time
-   to close it. Flat at 1 while the ball is inside what the keeper already
-   blocks or can certainly reach, then a Gaussian shoulder of width REACH.sw.
-   As sw goes to zero this collapses to the binary covered/open the page shows
-   today, which is the regression test for the whole model. */
+/* Abramowitz and Stegun 7.1.26. Good to about 1.5e-7, ample when the input is
+   a keeper's guess at how well they read a shot. */
+function erf(x){
+  const s=x<0?-1:1; x=Math.abs(x);
+  const t=1/(1+0.3275911*x);
+  const y=1-(((((1.061405429*t-1.453152027)*t+1.421413741)*t-0.284496736)*t+0.254829592)*t)*Math.exp(-x*x);
+  return s*y;
+}
+const normCdf=z=>0.5*(1+erf(z/Math.SQRT2));
+
+/* How long the keeper needs in order to cover a given gap: the inverse of
+   reachAt, piece for piece. Needed because the uncertainty now lives on the
+   clock rather than on a distance. */
+function timeToReach(gap){
+  if(gap<=0) return REACH.rt;
+  const tAcc=REACH.vm/REACH.ac;
+  const dAcc=0.5*REACH.ac*tAcc*tAcc;
+  const stable=s=>s<=tAcc ? 0.5*REACH.ac*s*s : REACH.vm*(s-tAcc/2);
+  const dCommit=stable(REACH.tc);
+  let m;
+  if(gap<=dAcc)          m=Math.sqrt(2*gap/REACH.ac);      // still accelerating
+  else if(gap<=dCommit)  m=gap/REACH.vm + tAcc/2;          // at top speed
+  else                   m=REACH.tc + (gap-dCommit)/REACH.vd;  // committed dive
+  return REACH.rt+m;
+}
+/* Probability of getting something on it.
+
+   Inside what the keeper already blocks it is 1: geometry, and it does not care
+   how well they read the shot.
+
+   Beyond that, the uncertainty is in the clock, not in a distance. A keeper who
+   picks the shot early is effectively moving before they otherwise could; one
+   who is wrong-footed loses the same time. That prediction bonus is treated as
+   normally distributed about zero, so the question becomes simply whether they
+   started early enough: compare the time this gap needs against the time the
+   ball gives them.
+
+   Putting the spread on distance instead -- which is what this did first -- was
+   wrong in a way the numbers made obvious. A fixed 15 cm of slop implied a
+   timing variation of 825 ms on a close-range flick, where the keeper has barely
+   twitched, against 50 ms on a long shot. It was most forgiving exactly where it
+   should have been least. Time propagates through the kinematics on its own and
+   comes out small when they have not started moving and larger once they are
+   travelling. */
 function saveProb(gap,t){
   if(gap<=0) return 1;
-  const R=reachAt(t), over=Math.max(0,gap-R);
-  const p=Math.exp(-(over*over)/(2*REACH.sw*REACH.sw));
-  return gap<=extendAt(t) ? p : p*REACH.cm;
+  const need=timeToReach(gap);
+  const p=normCdf((t-need)/REACH.pb);
+  return (need-REACH.rt)<=REACH.tc ? p : p*REACH.cm;   // penalty only if it took a dive
 }
 
 /* ---- the sliders, built from the spec ---- */
@@ -1599,7 +1639,9 @@ function drawReachCharts(){
   // save probability against how far the ball is beyond what is already blocked,
   // at the flight time this shot actually gives
   const t=lastFlightTime||0.5;
-  const gMax=Math.max(0.8, reachAt(t)+4*REACH.sw);
+  // out to where the curve has clearly died, which now depends on how much
+  // time the prediction bonus can buy rather than on a distance
+  const gMax=Math.max(0.8, reachAt(t+3*REACH.pb));
   const pp=[]; for(let i=0;i<=120;i++){ const g=gMax*i/120; pp.push([g,saveProb(g,t)]); }
   el('probCap').textContent='Chance of a save against gap to close, at '+(t*1000).toFixed(0)+' ms flight.';
   el('probChart').innerHTML=
