@@ -1507,7 +1507,8 @@ const REACH_PARAMS=[
   {k:'cm', id:'rCm', label:'Commit penalty',unit:'',    min:0.3,  max:1,   step:0.05, def:0.85},
   {k:'ku', id:'rKu', label:'Reach up',      unit:'x',   min:0.2,  max:1.5, step:0.05, def:0.6},
   {k:'kd', id:'rKd', label:'Reach down',    unit:'x',   min:0.2,  max:2,   step:0.05, def:1.15},
-  {k:'sw', id:'rSw', label:'Sloppiness',    unit:'m',   min:0.01, max:0.6, step:0.01, def:0.15}
+  {k:'sw', id:'rSw', label:'Reach spread',  unit:'m',   min:0.01, max:0.6, step:0.01, def:0.15,
+   note:'how much their reach varies shot to shot'}
 ];
 const REACH={};
 REACH_PARAMS.forEach(p=>REACH[p.k]=p.def);
@@ -1544,10 +1545,33 @@ function scaledGap(dx,dy){
    blocks or can certainly reach, then a Gaussian shoulder of width REACH.sw.
    As sw goes to zero this collapses to the binary covered/open the page shows
    today, which is the regression test for the whole model. */
+/* Abramowitz and Stegun 7.1.26. Good to about 1.5e-7, which is ample when the
+   input is a keeper's guess at their own reach. */
+function erf(x){
+  const s=x<0?-1:1; x=Math.abs(x);
+  const t=1/(1+0.3275911*x);
+  const y=1-(((((1.061405429*t-1.453152027)*t+1.421413741)*t-0.284496736)*t+0.254829592)*t)*Math.exp(-x*x);
+  return s*y;
+}
+const normCdf=z=>0.5*(1+erf(z/Math.SQRT2));
+
+/* Probability of getting something on it.
+   Inside what the keeper already blocks it is 1: that is geometry, and it does
+   not care how consistent they are. Beyond that, how far they actually get is
+   not a fixed number -- so reach is treated as normally distributed about the
+   nominal figure, and the answer is simply the chance it turns out to be long
+   enough.
+
+   This replaces a one-sided Gaussian shoulder, which was wrong in a way worth
+   recording: it left p at 1 everywhere inside reach whatever the spread, and
+   only ever added probability outside it, so raising "sloppiness" raised the
+   save chance across the board. Uncertainty has to cut both ways. It now does:
+   at gap = reach the answer is 0.5 for any spread, above it the spread helps,
+   below it the spread hurts. As the spread goes to zero it still collapses to
+   the binary covered/open the page shows with the model off. */
 function saveProb(gap,t){
   if(gap<=0) return 1;
-  const R=reachAt(t), over=Math.max(0,gap-R);
-  const p=Math.exp(-(over*over)/(2*REACH.sw*REACH.sw));
+  const p=normCdf((reachAt(t)-gap)/REACH.sw);
   return gap<=extendAt(t) ? p : p*REACH.cm;
 }
 
