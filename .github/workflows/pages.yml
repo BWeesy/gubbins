@@ -1,13 +1,20 @@
 name: pages
 
-# Publishes the repo's web things to GitHub Pages. Pages is configured in the
-# repo settings with source "GitHub Actions", so this workflow is the only
-# thing that deploys -- there is no gh-pages branch to keep in sync.
+# Publishes the repo's web things to GitHub Pages.
 #
-# The site root is a landing page (.github/pages/index.html) and each project
-# is served from its own subpath, so a second site can be added later without
-# moving the first one's URL. Adding a project takes two edits: a copy line in
-# "Assemble site" below, and a card on the landing page.
+# A repository gets exactly one Pages deployment, and each deploy replaces the
+# whole site, so dev and production are two paths inside a single artifact and
+# every run rebuilds both:
+#
+#   production   /gubbins/            and  /gubbins/on-the-angle/
+#   dev          /gubbins/dev/        and  /gubbins/dev/on-the-angle/
+#
+# Dev is whatever is on main. Production is whatever the `prod` tag points at,
+# which only moves when someone runs the promote workflow. That is what keeps
+# the links already handed out to the club steady while main carries on.
+#
+# Trunk-based on purpose: there is no integration branch. main is the only
+# branch that deploys, and promotion marks a commit already on it.
 on:
   push:
     branches: [main]
@@ -16,6 +23,7 @@ on:
       - '.github/pages/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -36,15 +44,84 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out main (this becomes dev)
+        uses: actions/checkout@v7
+        with:
+          path: dev-src
+          fetch-depth: 0          # tags too, so the prod marker can be read
+
+      - name: Work out which commit production should be built from
+        id: prod
+        working-directory: dev-src
+        run: |
+          if git rev-parse -q --verify refs/tags/prod >/dev/null; then
+            sha=$(git rev-parse refs/tags/prod^{commit})
+            echo "Production is pinned to ${sha}"
+          else
+            # No marker yet. Falling back to main keeps the site up rather than
+            # publishing an empty production directory over live links; the
+            # first promotion creates the tag and this stops happening.
+            sha="${GITHUB_SHA}"
+            echo "::warning::No 'prod' tag found - building production from main. Run the promote workflow to pin it."
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out production
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.prod.outputs.sha }}
+          path: prod-src
 
       - name: Assemble site
         run: |
-          mkdir -p _site
-          cp .github/pages/index.html _site/
-          cp -R on-the-angle _site/on-the-angle
-          # READMEs are for people reading the repo, not visitors to the site.
-          find _site -name 'README.md' -delete
+          set -euo pipefail
+          assemble() {           # $1 = source checkout, $2 = destination
+            mkdir -p "$2"
+            cp "$1/.github/pages/index.html" "$2/"
+            cp -R "$1/on-the-angle" "$2/on-the-angle"
+            # READMEs are for people reading the repo, not visitors to the site.
+            find "$2" -name 'README.md' -delete
+          }
+          assemble prod-src _site
+          assemble dev-src  _site/dev
+
+          # Mark the dev copies. Without this the two are indistinguishable,
+          # which is how a dev link ends up bookmarked or forwarded. noindex
+          # also keeps dev from competing with production in search results.
+          # No bare '&' in the replacement: sed reads one as "the whole match",
+          # which quietly duplicated the <body> tag the first time round.
+          banner='<div style="position:fixed;left:0;right:0;top:0;z-index:99999;background:#b3541e;color:#fff;font:600 12px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;text-align:center;letter-spacing:.08em;pointer-events:none">DEV BUILD - NOT THE SHARED LINK</div>'
+          find _site/dev -name '*.html' -print0 | xargs -0 sed -i \
+            -e "s|<head>|<head><meta name=\"robots\" content=\"noindex\">|" \
+            -e "s|<body>|<body>${banner}|"
+
+      # The marking edits someone else's HTML by text substitution, so check it
+      # did what it claims rather than trust it. The duplicate-<body> bug above
+      # got as far as a rendered page before anything noticed.
+      - name: Check the dev marking, and that none of it reached production
+        run: |
+          set -euo pipefail
+          while IFS= read -r f; do
+            n=$(grep -c '<body>' "$f")
+            [ "$n" = 1 ] || { echo "::error::$f has $n <body> tags after marking"; exit 1; }
+            grep -q 'DEV BUILD' "$f"          || { echo "::error::$f lost the dev banner"; exit 1; }
+            grep -q 'content="noindex"' "$f"  || { echo "::error::$f lost its noindex"; exit 1; }
+          done < <(find _site/dev -name '*.html')
+
+          while IFS= read -r f; do
+            if grep -q 'DEV BUILD\|content="noindex"' "$f"; then
+              echo "::error::dev marking leaked into the production file $f"; exit 1
+            fi
+          done < <(find _site -name '*.html' -not -path '_site/dev/*')
+
+      - name: Summarise what is being published
+        run: |
+          {
+            echo "| Path | Commit |"
+            echo "| --- | --- |"
+            echo "| production \`/\` | \`${{ steps.prod.outputs.sha }}\` |"
+            echo "| dev \`/dev/\` | \`${GITHUB_SHA}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload site
         uses: actions/upload-pages-artifact@v5

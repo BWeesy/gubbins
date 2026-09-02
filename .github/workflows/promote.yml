@@ -1,0 +1,73 @@
+name: promote to production
+
+# Moves the `prod` tag, which is the only thing that decides what production
+# serves, then redeploys. Run it from the Actions tab when dev looks right.
+#
+# A tag rather than a commit on main, deliberately: main requires a pull
+# request and the Actions token is not a bypass actor, so a workflow cannot
+# push to it. Tags are not covered by that ruleset.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit SHA or ref to promote (must already be on main)'
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  move-marker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # to move the tag
+    outputs:
+      sha: ${{ steps.pin.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Pin production to the requested commit
+        id: pin
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse --verify "origin/${{ inputs.ref }}^{commit}" 2>/dev/null \
+                || git rev-parse --verify "${{ inputs.ref }}^{commit}")
+
+          # Trunk-based: production can only ever be something that is on main.
+          # Without this you could promote a branch that was never reviewed.
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::${sha} is not on main. Only commits merged to main can be promoted."
+            exit 1
+          fi
+
+          was=$(git rev-parse -q --verify refs/tags/prod^{commit} || echo 'nothing yet')
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+          git tag -f prod "$sha"
+          git push -f origin refs/tags/prod
+
+          {
+            echo "### Promoted to production"
+            echo ""
+            echo "| | Commit |"
+            echo "| --- | --- |"
+            echo "| was | \`${was}\` |"
+            echo "| now | \`${sha}\` |"
+            echo ""
+            echo "\`\`\`"
+            git log -1 --format='%s%n%n%an, %ad' "$sha"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Rebuild both paths so production picks the new marker up. Nothing else
+  # deploys, so this is the step that actually makes it live.
+  deploy:
+    needs: move-marker
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
