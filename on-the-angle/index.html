@@ -546,7 +546,6 @@ scene.add(ball);
 // the old teal sat at contrast 1.08 on the pitch (dE 4 under tritanopia --
 // effectively invisible). A dark keeper fixes the pitch and vanishes into the
 // sky instead; only a light one clears both (2.55 on pitch, 11.9 on sky).
-const keeperMat = new THREE.MeshStandardMaterial({color:0xffe9c9, roughness:.7, side:THREE.DoubleSide});
 const keeper = new THREE.Group(); scene.add(keeper);      // silhouette rebuilt each update
 
 const heatGroup = new THREE.Group(); scene.add(heatGroup);
@@ -707,19 +706,174 @@ function faceMesh(pts,z,color,op){                      // filled polygon on the
 }
 
 /* ---- keeper silhouette (posture): local polygon of [s (along width), y (height)] ---- */
-function silhouette(kw,kh,posture){
-  const hw=kw/2;
-  if(posture==='spread'){                               // low + wide (logs / star)
-    const Wb=kw*0.85, H=kh*0.6, hd=0.12;
-    return {poly:[[-Wb,0],[Wb,0],[hw,H],[hd,H],[hd,H+0.18],[-hd,H+0.18],[-hd,H],[-hw,H]], footMin:-Wb, footMax:Wb};
-  }
-  return {poly:[[-hw,0],[hw,0],[hw,kh],[-hw,kh]], footMin:-hw, footMax:hw};  // set (standing rectangle)
+/* Kit sizes are the FIH maxima, which is what a senior keeper actually wears:
+   Rules of Hockey 2026, 4.1a (hand protector 228 x 365 mm laid flat) and 4.2
+   (leg guard 300 mm wide). Body proportions are the usual anthropometric
+   fractions of stature, so the whole shape scales with the height slider
+   rather than being drawn for one keeper. */
+const KIT={gloveW:0.228, gloveL:0.365, legGuardW:0.300, armour:0.040, armThick:0.110};
+const FRAC={shoulderY:0.818, hipY:0.530, neckY:0.860, shoulderHW:0.1295,
+            headHW:0.075, armLen:0.332};   // armLen = upper arm 0.186 + forearm 0.146
+
+/* The keeper is a set of named parts, each a polygon in the silhouette plane
+   with its own colour and its own save weight, so the model shows what is
+   doing the blocking and the maths can weight it later.
+
+   Polygons rather than a hand-walked outline because walking the boundary is
+   what went wrong first time: the crouch's gloves straddled the hip line, the
+   point list doubled back and the polygon self-intersected. An envelope over
+   parts cannot do that whatever the numbers turn out to be. */
+const boxPart=(kind,x0,x1,y0,y1)=>({kind,
+  poly:[[Math.min(x0,x1),y0],[Math.max(x0,x1),y0],[Math.max(x0,x1),y1],[Math.min(x0,x1),y1]],
+  colour:PART[kind].colour, save:PART[kind].save});
+/* A held stick: a thin bar from the hand, angled down and out. Not axis
+   aligned, which is the whole reason parts are polygons. */
+function stickPart(hand,dirDeg,len,thick){
+  const a=dirDeg*Math.PI/180, u=[Math.cos(a),Math.sin(a)], n=[-u[1],u[0]];   // negative dirDeg points down
+  const tip=[hand[0]+u[0]*len, hand[1]+u[1]*len], h=thick/2;
+  return {kind:'stick', colour:PART.stick.colour, save:PART.stick.save,
+    poly:[[hand[0]+n[0]*h,hand[1]+n[1]*h],[tip[0]+n[0]*h,tip[1]+n[1]*h],
+          [tip[0]-n[0]*h,tip[1]-n[1]*h],[hand[0]-n[0]*h,hand[1]-n[1]*h]]};
 }
-function silMesh(poly,mat){                             // thin extruded slab of the silhouette
-  const sh=new THREE.Shape(); sh.moveTo(poly[0][0],poly[0][1]);
-  for(let i=1;i<poly.length;i++) sh.lineTo(poly[i][0],poly[i][1]); sh.closePath();
-  const geo=new THREE.ExtrudeGeometry(sh,{depth:0.16,bevelEnabled:false}); geo.translate(0,0,-0.08);
-  return new THREE.Mesh(geo,mat);
+/* x-extent of a part within a horizontal slice, by clipping it to the band. */
+function partXRange(part,y0,y1){
+  let poly=part.poly;
+  for(const [keep,edge] of [[1,y0],[-1,y1]]){
+    const out=[];
+    for(let i=0;i<poly.length;i++){
+      const a=poly[i], b=poly[(i+1)%poly.length];
+      const da=(a[1]-edge)*keep, db=(b[1]-edge)*keep;
+      if(da>=0) out.push(a);
+      if((da>=0)!==(db>=0)){
+        const t=(edge-a[1])/(b[1]-a[1]);
+        out.push([a[0]+t*(b[0]-a[0]), edge]);
+      }
+    }
+    poly=out;
+    if(!poly.length) return null;
+  }
+  const xs=poly.map(p=>p[0]);
+  return [Math.min(...xs), Math.max(...xs)];
+}
+function outlineFromParts(parts){
+  const ys=new Set();
+  parts.forEach(p=>{
+    const py=p.poly.map(q=>q[1]), lo=Math.min(...py), hi=Math.max(...py);
+    ys.add(lo); ys.add(hi);
+    // sloped parts get intermediate cuts so the staircase follows the slope
+    const sloped=new Set(p.poly.map(q=>q[1])).size>2;
+    if(sloped) for(let i=1;i<8;i++) ys.add(lo+(hi-lo)*i/8);
+  });
+  const edges=[...ys].sort((a,b)=>a-b);
+  const R=[], L=[];
+  const push=(arr,p)=>{ const l=arr[arr.length-1]; if(!l||l[0]!==p[0]||l[1]!==p[1]) arr.push(p); };
+  for(let i=0;i<edges.length-1;i++){
+    const y0=edges[i], y1=edges[i+1];
+    if(y1-y0<1e-6) continue;
+    const rng=parts.map(p=>partXRange(p,y0,y1)).filter(Boolean);
+    if(!rng.length) continue;
+    const xr=Math.max(...rng.map(r=>r[1])), xl=Math.min(...rng.map(r=>r[0]));
+    push(R,[xr,y0]); push(R,[xr,y1]);
+    push(L,[xl,y0]); push(L,[xl,y1]);
+  }
+  return R.concat(L.reverse());          // up the right side, back down the left
+}
+
+/* ---- postures -----------------------------------------------------------
+   Two, chosen by the user rather than inferred: standing with the arms up,
+   and crouched with the hands down beside the legs.
+
+   Both are a single closed outline with no hole between the legs. A keeper
+   does have a gap there and balls go through it, but the coverage maths
+   clips one simple polygon; parts with holes want the sampled field that
+   comes with the save-probability work, so it is deliberately left for then. */
+/* Deflecting with the stick is far harder than getting a pad or the body
+   behind it, so parts carry a save weight rather than all counting the same.
+   Until the probability model can use those weights, the binary coverage
+   polygon is built from the solid parts only (>= BLOCK_MIN) and the stick is
+   drawn and measured but does not inflate the percentage. */
+const BLOCK_MIN=0.6;
+const PART={
+  pad:   {colour:0xf2ead8, save:1.00},
+  body:  {colour:0xdde3ea, save:1.00},
+  helmet:{colour:0xc7ccd4, save:1.00},
+  glove: {colour:0xffd08a, save:0.90},
+  // Light, not the obvious brown: measured against the rendered scene, a brown
+  // stick sits at contrast 1.02 against the pitch it lies on -- invisible, the
+  // same failure as the old teal keeper. Nothing clears both the light pitch and
+  // the dark sky, so it takes the one that clears both backgrounds (3.7 and 17)
+  // and accepts reading close to the pads, which its shape distinguishes anyway.
+  stick: {colour:0xeef2f5, save:0.35}
+};
+const STICK_LEN=0.92;          // typical GK stick; the rules cap the ring and weight, not length
+const STICK_SIDE=1;            // keepers are right-handed; +1 is the stick side of the silhouette
+const STICK_READY=-45;         // held out and down from the glove in the ready stance
+const STICK_LOW=-10;           // almost flat along the ground in the crouch
+
+function silhouette(kw,kh,posture){
+  const H=kh, legHW=Math.max(KIT.legGuardW, kw/2);             // outer edge of the leg guards
+  const torsoHW=FRAC.shoulderHW*H + KIT.armour;
+  const headHW=FRAC.headHW*H;
+  const S=STICK_SIDE;
+  let parts;
+
+  if(posture==='crouch'||posture==='spread'){
+    // Deep crouch with the gloves stood on their fingertips either side of the
+    // legs, closing the low gaps: the 228 mm width reaches out, the 365 mm
+    // length stands up. The stick is still in the right hand, laid almost flat
+    // along the ground from it.
+    const stanceHW=legHW+0.06;                                 // knees driven out
+    const hipY=0.36*H, neckY=0.58*H, headTopY=0.72*H;
+    const gOut=stanceHW+KIT.gloveW;
+    parts=[
+      boxPart('pad',   -stanceHW, stanceHW, 0,     hipY),
+      boxPart('body',  -torsoHW,  torsoHW,  hipY,  neckY),
+      boxPart('helmet',-headHW,   headHW,   neckY, headTopY),
+      boxPart('glove',  stanceHW, gOut,     0,     KIT.gloveL),
+      boxPart('glove', -stanceHW,-gOut,     0,     KIT.gloveL),
+      stickPart([S*gOut, KIT.gloveL*0.5], S>0?STICK_LOW:180-STICK_LOW, STICK_LEN, 0.03)
+    ];
+  } else {
+    // Ready stance: hands in front at chest height, gloves facing the shooter.
+    // From the ball the forearms point almost straight at you and foreshorten
+    // to nothing, so what blocks is pads, body, helmet and two glove faces.
+    // The stick hangs from the right glove, out and down at STICK_READY.
+    const hipY=FRAC.hipY*H, neckY=FRAC.neckY*H;
+    const gIn=torsoHW-0.03, gOut=torsoHW+0.06+KIT.gloveW;
+    const gMid=0.68*H, gBot=gMid-KIT.gloveL/2, gTop=gMid+KIT.gloveL/2;
+    parts=[
+      boxPart('pad',   -legHW,  legHW,  0,     hipY),
+      boxPart('body',  -torsoHW,torsoHW,hipY,  neckY),
+      boxPart('helmet',-headHW, headHW, neckY, H),
+      boxPart('glove',  gIn,    gOut,   gBot,  gTop),
+      boxPart('glove', -gIn,   -gOut,   gBot,  gTop),
+      stickPart([S*(gOut-KIT.gloveW/2), gMid], S>0?STICK_READY:180-STICK_READY, STICK_LEN, 0.03)
+    ];
+  }
+
+  const solid=parts.filter(p=>p.save>=BLOCK_MIN);
+  const groundX=solid.flatMap(p=>p.poly.filter(q=>q[1]<=0.001).map(q=>q[0]));
+  return {poly:outlineFromParts(solid), parts,
+          footMin:Math.min(...groundX), footMax:Math.max(...groundX)};
+}
+/* One thin slab per part, each in its own colour, so the model shows what is
+   actually doing the blocking. Materials are cached by colour: the parts are
+   rebuilt whenever the silhouette changes, and a material per rebuild would
+   leak the way the hatch textures did. */
+const partMats=new Map();
+function partMaterial(colour){
+  if(!partMats.has(colour)) partMats.set(colour,
+    new THREE.MeshStandardMaterial({color:colour, roughness:.7, side:THREE.DoubleSide}));
+  return partMats.get(colour);
+}
+function partMesh(p){
+  const sh=new THREE.Shape();
+  sh.moveTo(p.poly[0][0],p.poly[0][1]);
+  for(let i=1;i<p.poly.length;i++) sh.lineTo(p.poly[i][0],p.poly[i][1]);
+  sh.closePath();
+  const depth=p.kind==='stick'?0.03:0.16;
+  const geo=new THREE.ExtrudeGeometry(sh,{depth,bevelEnabled:false}); geo.translate(0,0,-depth/2);
+  return new THREE.Mesh(geo, partMaterial(p.colour));
 }
 function faceAngle(d){ return Math.atan2(-d.x,-d.y); }  // rotate slab so its width is perpendicular to the sightline
 function disposeChildren(gr,keep){
@@ -733,9 +887,12 @@ function disposeChildren(gr,keep){
     } }
 }
 let keeperSig='';                                       // rebuild keeper mesh only when silhouette changes
-function ensureKeeperMesh(poly){
-  const sig=JSON.stringify(poly);
-  if(sig!==keeperSig){ disposeChildren(keeper,[keeperMat]); keeper.add(silMesh(poly,keeperMat)); keeperSig=sig; }
+function ensureKeeperMesh(parts){
+  const sig=JSON.stringify(parts.map(p=>[p.kind,p.poly]));
+  if(sig===keeperSig) return;
+  disposeChildren(keeper,[...partMats.values()]);
+  parts.forEach(p=>keeper.add(partMesh(p)));
+  keeperSig=sig;
 }
 
 /* ---- heatmap: coverage % from every shot spot inside the D ---- */
@@ -882,7 +1039,7 @@ function update(){
 
   /* ---- place meshes ---- */
   ball.position.set(bx, BALL_R, bz);
-  ensureKeeperMesh(sil.poly);
+  ensureKeeperMesh(sil.parts);
   keeper.position.set(K.x, 0, K.y);
   keeper.rotation.y=faceAngle(dir);
   bxBall=bx; bzBall=bz;                                     // for goal-face projection
