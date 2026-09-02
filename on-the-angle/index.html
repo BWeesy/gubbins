@@ -808,6 +808,7 @@ const PART={
 const STICK_LEN=0.92;          // typical GK stick; the rules cap the ring and weight, not length
 const STICK_SIDE=1;            // keepers are right-handed; +1 is the stick side of the silhouette
 const STICK_READY=-45;         // held out and down from the glove in the ready stance
+const CROUCH_RATIO=0.98/1.80;  // measured: 0.98 m crouched at 1.80 m standing
 const STICK_LOW=-10;           // almost flat along the ground in the crouch
 
 function silhouette(kw,kh,posture){
@@ -823,7 +824,11 @@ function silhouette(kw,kh,posture){
     // length stands up. The stick is still in the right hand, laid almost flat
     // along the ground from it.
     const stanceHW=legHW+0.06;                                 // knees driven out
-    const hipY=0.36*H, neckY=0.58*H, headTopY=0.72*H;
+    // Measured, not guessed: 0.98 m crouched for a 1.80 m keeper. The head keeps
+    // its real size, so the neck follows from the top rather than being its own
+    // fraction, and the hip drops to suit -- a crouch this low has the torso
+    // folded well forward.
+    const headTopY=CROUCH_RATIO*H, neckY=headTopY-0.14*H, hipY=0.24*H;
     const gOut=stanceHW+KIT.gloveW;
     parts=[
       boxPart('pad',   -stanceHW, stanceHW, 0,     hipY),
