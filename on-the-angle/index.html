@@ -626,23 +626,29 @@ function keeperOnBisector(B,d){
   const t=(dd - B.y)/bis.y;
   return B.clone().add(bis.clone().multiplyScalar(t));
 }
-function shadowSpan(B,K,kw){ // unclamped shadow edges on the goal line: [min,max]
+/* Unclamped shadow edges on the goal line, from the silhouette's own extents
+   rather than the stance-width slider. Those are not the same thing: in the
+   crouch the gloves are on the floor a hand's width outside the pads, so a
+   keeper positioned by stance alone puts a hand beyond the post and throws
+   away the saving surface it was supposed to buy. groundPct has always used
+   the real extent; the positioning had not caught up. */
+function shadowSpan(B,K,sMin,sMax){
   const dir=B.clone().sub(K).normalize();
   const perp=new THREE.Vector2(-dir.y, dir.x);
-  const E1=K.clone().add(perp.clone().multiplyScalar(kw/2));
-  const E2=K.clone().add(perp.clone().multiplyScalar(-kw/2));
+  const E1=K.clone().add(perp.clone().multiplyScalar(sMax));
+  const E2=K.clone().add(perp.clone().multiplyScalar(sMin));
   const xa=projToLine(B,E1), xb=projToLine(B,E2);
   if(xa===null||xb===null) return null;
   return [Math.min(xa,xb), Math.max(xa,xb)];
 }
 // place the guided keeper at depth d according to priority (near/centre/far corner)
-function guidedKeeper(B,d,prio,kw){
+function guidedKeeper(B,d,prio,sil){
   d=Math.min(Math.max(d,0), B.y-0.85);
   if(prio==='centre') return keeperOnBisector(B,d);
   const near=(B.x>=0)?1:-1;                       // +1 if near post is on +x side
   const postX=(prio==='near')? near*HALF : -near*HALF;
   const trackMax=postX>0;                          // pin the shadow edge nearest that post
-  const edgeErr=x=>{ const sp=shadowSpan(B,new THREE.Vector2(x,d),kw);
+  const edgeErr=x=>{ const sp=shadowSpan(B,new THREE.Vector2(x,d),sil.footMin,sil.footMax);
     if(!sp) return trackMax?-1e3:1e3; return (trackMax?sp[1]:sp[0])-postX; };
   let lo=-14, hi=14;                               // edgeErr rises monotonically with x
   for(let i=0;i<30;i++){ const mid=(lo+hi)/2; if(edgeErr(mid)>0) hi=mid; else lo=mid; }
@@ -938,7 +944,7 @@ function computeHeatmap(){
   // keep the keeper fixed at its current position (as in Free mode) rather than re-solving per shot spot
   const Kcur = lastState ? lastState.K.clone() : (keeperMode==='free'
     ? new THREE.Vector2(+el('kx').value,+el('kz').value)
-    : guidedKeeper(new THREE.Vector2(+el('bx').value,+el('bz').value), off, priority, kw));
+    : guidedKeeper(new THREE.Vector2(+el('bx').value,+el('bz').value), off, priority, sil));
   const sbx=bxBall, sbz=bzBall, step=0.5, y=0.009, pos=[], col=[];
   for(let x=-16;x<16;x+=step) for(let z=0.4;z<16;z+=step){
     const cx=x+step/2, cz=z+step/2; if(!insideD(cx,cz)) continue;
@@ -1035,24 +1041,27 @@ const el = id=>document.getElementById(id);
 let placeMode='', keeperMode='bis', priority='centre', coverageMode='face', posture='set';
 
 function update(){
-  const bx=+el('bx').value, bz=+el('bz').value, kw=+el('kw').value;
+  const bx=+el('bx').value, bz=+el('bz').value, kw=+el('kw').value, kh=+el('kh').value;
   const B=new THREE.Vector2(bx,bz);
+
+  // ---- keeper silhouette (posture) ----
+  // Built before the keeper is placed, because placing them now depends on it:
+  // the guided position aligns the silhouette's real edge with the post, and
+  // the silhouette itself does not depend on where the keeper ends up.
+  const sil=silhouette(kw,kh,posture);
 
   // ---- keeper position ----
   let K;
   const uL=pL.clone().sub(B).normalize(), uR=pR.clone().sub(B).normalize();
   const bis=uL.clone().add(uR).normalize();               // bisector direction (points toward goal)
   if(keeperMode==='bis'){
-    K=guidedKeeper(B, +el('off').value, priority, kw);
+    K=guidedKeeper(B, +el('off').value, priority, sil);
   }else{
     K=new THREE.Vector2(+el('kx').value, +el('kz').value);
   }
 
-  // ---- keeper silhouette (posture) ----
-  const kh=+el('kh').value;
   const dir=B.clone().sub(K).normalize();
   const perp=new THREE.Vector2(-dir.y, dir.x);
-  const sil=silhouette(kw,kh,posture);
 
   // ---- shadow on goal line (from silhouette footprint) ----
   const Efa=K.clone().add(perp.clone().multiplyScalar(sil.footMax));
