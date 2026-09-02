@@ -160,6 +160,7 @@
     <rect x="0" y="0" width="366" height="214" id="hudOpen"/>
     <rect x="0" y="0" width="366" height="214" fill="url(#hudHatch)"/>
     <polygon id="hudCovered" points=""/>
+    <g id="hudField" opacity="0"></g>
     <rect x="0" y="0" width="366" height="214" fill="none" stroke="#dfeef2" stroke-width="4"/>
   </svg>
 </div>
@@ -964,8 +965,14 @@ function computeHeatmap(){
    there is nothing for a driver to sample wrongly. Placement is separate, in
    placeHud(), because it follows the camera rather than the state. */
 function drawBillboard(d){
-  el('hudLabel').textContent=d.metric+' covered';
-  el('hudPct').textContent=Math.round(d.pct)+'%';
+  // With the reach model on the panel follows the 3D view: what is shown is no
+  // longer how much net is blocked standing still, but how much of a shot at
+  // this goal the keeper is likely to stop. Two different questions, so the
+  // headline changes with the picture rather than quietly meaning something
+  // else under the same label.
+  const fieldOn=reachOn && d.field;
+  el('hudLabel').textContent=fieldOn?'Save chance':(d.metric+' covered');
+  el('hudPct').textContent=Math.round(fieldOn?d.field.mean*100:d.pct)+'%';
   el('hudNear').textContent=(d.nearGap*100).toFixed(0)+' cm';
   el('hudFar').textContent=(d.farGap*100).toFixed(0)+' cm';
   // SVG viewBox is the goal mouth in centimetres, origin at the near post,
@@ -979,6 +986,24 @@ function drawBillboard(d){
     pts=[[d.covL,0],[d.covR,0],[d.covR,GOAL_H],[d.covL,GOAL_H]].map(p=>mapx(p[0])+','+mapy(p[1])).join(' ');
   }
   el('hudCovered').setAttribute('points',pts);
+  drawHudField(fieldOn?d.field:null);
+}
+
+/* The schematic as a shaded grid when the field is on, coarser than the 3D one
+   because the panel is only a few centimetres across. */
+function drawHudField(field){
+  const g=el('hudField');
+  if(!field){ g.innerHTML=''; g.setAttribute('opacity','0'); return; }
+  g.setAttribute('opacity','1');
+  const step=3, out=[];
+  for(let i=0;i<field.cells.length;i+=step){
+    const [x0,y0,x1,y1,p]=field.cells[i];
+    const c=heatColor(p).map(v=>Math.round(v*255));
+    out.push('<rect x="'+((x0+HALF)*100).toFixed(1)+'" y="'+((GOAL_H-y1)*100).toFixed(1)+
+      '" width="'+((x1-x0)*100+1).toFixed(1)+'" height="'+((y1-y0)*100+1).toFixed(1)+
+      '" fill="rgb('+c[0]+','+c[1]+','+c[2]+')"/>');
+  }
+  g.innerHTML=out.join('');
 }
 /* Hang the panel off the goal anchor: project it, and place the panel's bottom
    centre there. Its on-screen height is bbHeightFactor() of the viewport and
@@ -1083,10 +1108,17 @@ function update(){
   }
   if(el('oCover').checked){
     if(useFace){
-      // Open net carries the colour and the hatch, with the covered region cut
-      // out of it, so the two never share a pattern. Covered goes on top, flat.
-      viz.add(openFaceMesh(face&&face.poly.length>=3?face.poly:null, 0.0, PAL().open, 0.30));
-      if(face && face.poly.length>=3) viz.add(faceMesh(face.poly, 0.05, PAL().covered, 0.5));
+      if(reachOn){
+        // With the reach model on, the binary block gives way to the shaded
+        // field: one picture at a time, so a colour never means two things.
+        const f=buildSaveField(B,K,sil.parts);
+        if(f) viz.add(f);
+      } else {
+        // Open net carries the colour and the hatch, with the covered region cut
+        // out of it, so the two never share a pattern. Covered goes on top, flat.
+        viz.add(openFaceMesh(face&&face.poly.length>=3?face.poly:null, 0.0, PAL().open, 0.30));
+        if(face && face.poly.length>=3) viz.add(faceMesh(face.poly, 0.05, PAL().covered, 0.5));
+      }
       viz.add(polyline([new THREE.Vector3(-HALF,0,0),new THREE.Vector3(HALF,0,0),
         new THREE.Vector3(HALF,GOAL_H,0),new THREE.Vector3(-HALF,GOAL_H,0),new THREE.Vector3(-HALF,0,0)],0xdfeef2));
     } else if(xa!==null){
@@ -1143,7 +1175,10 @@ function update(){
   }
 
   if(el('oBillboard').checked) drawBillboard({ metric: useFace?'Goal face':'Ground line', pct: headPct,
-    nearGap, farGap, facePoly:(useFace&&face)?face.poly:null, covL, covR, coveredW });
+    nearGap, farGap, facePoly:(useFace&&face)?face.poly:null, covL, covR, coveredW,
+    // only when the field was actually rebuilt this pass, or the panel would
+    // show a stale one with the overlay switched off
+    field:(reachOn&&useFace&&el('oCover').checked)?lastField:null });
 
   lastState={bx,bz,K};   // dir went with the keeper-POV preset
   // Time the ball takes to reach the keeper, not the goal line: that is the
@@ -1580,6 +1615,85 @@ function setReach(on){
   drawReachCharts(); update();
 }
 el('reachBtn').addEventListener('click',()=>setReach(!reachOn));
+
+/* ------------------------------------------------------------------ */
+/*  Save-probability field over the goal mouth                         */
+/* ------------------------------------------------------------------ */
+/* Closest point on a convex part, and whether we are inside it. */
+function closestOnPart(poly,px,py){
+  let inside=true, best=null, bestD=Infinity;
+  for(let i=0;i<poly.length;i++){
+    const a=poly[i], b=poly[(i+1)%poly.length];
+    const ex=b[0]-a[0], ey=b[1]-a[1];
+    if((px-a[0])*ey-(py-a[1])*ex > 0) inside=false;       // parts are wound consistently
+    const L=ex*ex+ey*ey;
+    const t=L?Math.max(0,Math.min(1,((px-a[0])*ex+(py-a[1])*ey)/L)):0;
+    const cx=a[0]+t*ex, cy=a[1]+t*ey, d=(px-cx)**2+(py-cy)**2;
+    if(d<bestD){ bestD=d; best=[cx,cy]; }
+  }
+  return {inside, cx:best[0], cy:best[1]};
+}
+/* Best chance across the parts, for a point in silhouette coordinates.
+   Each part carries its own save weight, so a ball that would meet the stick
+   is worth 0.35 of one that would meet a pad -- which is the whole reason the
+   stick is not simply added to the blocked area. */
+function bestSaveAt(s,h,parts,t){
+  let best=0;
+  for(const p of parts){
+    const c=closestOnPart(p.poly,s,h);
+    const gap = c.inside ? 0 : scaledGap(s-c.cx, h-c.cy);
+    const v = p.save*saveProb(gap,t);
+    if(v>best) best=v;
+  }
+  return best;
+}
+/* Shade the goal mouth by how likely the keeper is to stop a ball aimed there.
+   For each target point the ray from the ball is intersected with the keeper's
+   own plane: the gap they must close and the time they have are both measured
+   there, not at the goal line. Measuring at the goal line would overstate the
+   distance and hand them time they never get, and both errors are worst on
+   close-range shots where it matters most. */
+let lastField=null;
+const FIELD_STEP=0.06;                                    // metres across the goal mouth
+function buildSaveField(B,K,parts){
+  const Bv=new THREE.Vector3(B.x,BALL_R,B.y);
+  const Kp=new THREE.Vector3(K.x,0,K.y);
+  const n=new THREE.Vector3(B.x-K.x,0,B.y-K.y);
+  if(n.lengthSq()<1e-9) return null;
+  n.normalize();
+  const perp=new THREE.Vector3(n.z,0,-n.x);
+  const pos=[], col=[], P=new THREE.Vector3(), Q=new THREE.Vector3();
+  const cells=[]; let sum=0, n2=0;
+  const denomBase=Kp.clone().sub(Bv).dot(n);
+  const cellP=(X,Y)=>{
+    P.set(X,Y,0);
+    const dir=P.clone().sub(Bv);
+    const den=dir.dot(n);
+    if(Math.abs(den)<1e-9) return 0;
+    const u=denomBase/den;
+    if(u<=0) return 0;                                     // goal is behind the keeper's plane
+    Q.copy(Bv).addScaledVector(dir,u);
+    const t=Q.distanceTo(Bv)/REACH.bs;
+    return bestSaveAt(Q.clone().sub(Kp).dot(perp), Q.y, parts, t);
+  };
+  for(let X=-HALF; X<HALF-1e-9; X+=FIELD_STEP){
+    for(let Y=0; Y<GOAL_H-1e-9; Y+=FIELD_STEP){
+      const x1=Math.min(X+FIELD_STEP,HALF), y1=Math.min(Y+FIELD_STEP,GOAL_H);
+      const pv=Math.max(0,Math.min(1,cellP((X+x1)/2,(Y+y1)/2)));
+      sum+=pv; n2++; cells.push([X,Y,x1,y1,pv]);
+      const c=heatColor(pv);
+      const quad=[[X,Y],[x1,Y],[x1,y1],[X,Y],[x1,y1],[X,y1]];
+      for(const q of quad){ pos.push(q[0],q[1],0.02); col.push(c[0],c[1],c[2]); }
+    }
+  }
+  if(!pos.length) return null;
+  lastField={mean:n2?sum/n2:0, cells};
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(pos),3));
+  g.setAttribute('color',new THREE.BufferAttribute(new Float32Array(col),3));
+  return new THREE.Mesh(g,new THREE.MeshBasicMaterial({vertexColors:true,transparent:true,
+    opacity:0.72,side:THREE.DoubleSide,depthWrite:false}));
+}
 /* ---- shareable URL state ---- */
 function serialise(){
   const ov=(el('oCone').checked?1:0)|(el('oBis').checked?2:0)|(el('oCover').checked?4:0)|(el('oPyr').checked?8:0)|(el('oGrid').checked?16:0)|(el('oBillboard').checked?32:0);
