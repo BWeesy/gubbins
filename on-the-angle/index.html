@@ -275,7 +275,7 @@
     <div id="reachCtl" style="display:none">
       <p class="sub" style="margin:8px 0 4px">How far the keeper can reach, in metres, against time since the ball was hit. Zero through the shaded reaction time, then reach speed from there.</p>
       <svg id="reachChart" viewBox="0 0 200 92" class="chart"></svg>
-      <p class="sub" style="margin:8px 0 4px" id="probCap">Credit a point on the goal earns, 0 to 1, against how many metres it sits outside the blocked area.</p>
+      <p class="sub" style="margin:8px 0 4px" id="probCap">The weighting each point of the goal gets, 0 to 1, against how many metres it sits outside the blocked area.</p>
       <svg id="probChart" viewBox="0 0 200 92" class="chart"></svg>
       <div id="reachSliders"></div>
     </div>
@@ -984,7 +984,7 @@ function computeHeatmap(){
 function drawBillboard(d){
   // Weighted coverage, not a prediction. The figure is the statically blocked
   // area plus the goal the keeper could still get to, each part carrying less
-  // credit the further out of reach it is and the poorer a save that part
+  // weight the further out of reach it is and the poorer a save that part
   // would make. Calling it a save chance implied this simulates a shot against
   // a shooter, which it does not and cannot: it averages over the whole mouth
   // as though shots land at random, and they do not.
@@ -1639,7 +1639,7 @@ function drawReachCharts(){
   // time the prediction bonus can buy rather than on a distance
   const gMax=Math.max(0.8, reachAt(t+3*REACH.pb));
   const pp=[]; for(let i=0;i<=120;i++){ const g=gMax*i/120; pp.push([g,saveProb(g,t)]); }
-  el('probCap').textContent="Credit a point on the goal earns, 0 to 1, against how many metres it sits outside the blocked area. The dashed line is how far the keeper gets in this shot's "+(t*1000).toFixed(0)+" ms of flight.";
+  el('probCap').textContent="The weighting each point of the goal gets, 0 to 1, against how many metres it sits outside the blocked area. The dashed line is how far the keeper gets in this shot's "+(t*1000).toFixed(0)+" ms of flight.";
   el('probChart').innerHTML=
     axes(X0,Y0,W,H,gMax.toFixed(1)+' m','1.0')+
     '<line x1="'+xAt2(reachAt(t),gMax,X0,W).toFixed(1)+'" y1="'+Y0+'" x2="'+xAt2(reachAt(t),gMax,X0,W).toFixed(1)+'" y2="'+(Y0+H)+'" stroke="#ffcf5c" stroke-dasharray="3 3"/>'+
@@ -1712,7 +1712,7 @@ function bestSaveAt(s,h,parts,t){
    close-range shots where it matters most. */
 let lastField=null;
 const FIELD_STEP=0.06;                                    // metres across the goal mouth
-/* Credit for any point on the goal mouth, for one shot and one keeper position.
+/* The weighting for any point on the goal mouth, for one shot and one keeper position.
    Shared so the picture on the goal and the sweep across the pitch cannot drift
    apart: they are the same question asked at different resolutions. */
 function fieldSampler(B,K,parts){
@@ -1736,7 +1736,7 @@ function fieldSampler(B,K,parts){
     return Math.max(0,Math.min(1,bestSaveAt(Q.clone().sub(Kp).dot(perp), Q.y, parts, t)));
   };
 }
-/* Mean credit over the whole goal mouth: the figure the panel shows. Coarser
+/* Mean weighting over the whole goal mouth: the figure the panel shows. Coarser
    than the drawn field, because the pitch sweep asks for it once per shot spot
    and the cell counts multiply. */
 const HEAT_FIELD_STEP=0.15;
