@@ -266,12 +266,13 @@
 
 
   <div class="group">
-    <div class="glabel">Save probability</div>
-    <button id="reachBtn" style="width:100%" aria-pressed="false">Reach model: off</button>
+    <div class="glabel">Weighted coverage</div>
+    <button id="reachBtn" style="width:100%" aria-pressed="false">Include reach: off</button>
+    <p class="sub" style="margin:8px 0 0">Adds the goal you could still get to, weighted down by distance and by which part would get there. A coverage figure, not a prediction of saves.</p>
     <div id="reachCtl" style="display:none">
-      <p class="sub" style="margin:8px 0 4px">Reach against time. Flat until the keeper reacts, then accelerating, then committed.</p>
+      <p class="sub" style="margin:8px 0 4px">How far past the blocked area they could get, against time. Flat until they react, then steady.</p>
       <svg id="reachChart" viewBox="0 0 200 92" class="chart"></svg>
-      <p class="sub" style="margin:8px 0 4px" id="probCap">Chance of a save against how far it is out of reach.</p>
+      <p class="sub" style="margin:8px 0 4px" id="probCap">Credit given, against how far out of reach it is.</p>
       <svg id="probChart" viewBox="0 0 200 92" class="chart"></svg>
       <div id="reachSliders"></div>
     </div>
@@ -971,13 +972,14 @@ function computeHeatmap(){
    there is nothing for a driver to sample wrongly. Placement is separate, in
    placeHud(), because it follows the camera rather than the state. */
 function drawBillboard(d){
-  // With the reach model on the panel follows the 3D view: what is shown is no
-  // longer how much net is blocked standing still, but how much of a shot at
-  // this goal the keeper is likely to stop. Two different questions, so the
-  // headline changes with the picture rather than quietly meaning something
-  // else under the same label.
+  // Weighted coverage, not a prediction. The figure is the statically blocked
+  // area plus the goal the keeper could still get to, each part carrying less
+  // credit the further out of reach it is and the poorer a save that part
+  // would make. Calling it a save chance implied this simulates a shot against
+  // a shooter, which it does not and cannot: it averages over the whole mouth
+  // as though shots land at random, and they do not.
   const fieldOn=reachOn && d.field;
-  el('hudLabel').textContent=fieldOn?'Save chance':(d.metric+' covered');
+  el('hudLabel').textContent=fieldOn?'Weighted goal coverage':(d.metric+' covered');
   el('hudPct').textContent=Math.round(fieldOn?d.field.mean*100:d.pct)+'%';
   el('hudNear').textContent=(d.nearGap*100).toFixed(0)+' cm';
   el('hudFar').textContent=(d.farGap*100).toFixed(0)+' cm';
@@ -1497,46 +1499,30 @@ el('coordPolar').addEventListener('click',()=>setCoord('polar'));
 /* ------------------------------------------------------------------ */
 const REACH_PARAMS=[
   {k:'bs', id:'rBs', label:'Ball speed',    unit:'m/s', min:10,   max:35,  step:0.5,  def:22,
-   note:'How fast the shot travels. Sets the whole clock: everything below is a race against it. Drag flicks measure 18-28 m/s.'},
-  {k:'rt', id:'rRt', label:'Reaction',      unit:'s',   min:0.10, max:0.45,def_note:1, step:0.01, def:0.25,
-   note:'Dead time before anything moves. Experienced keepers 250-260 ms, novices 300-320.'},
-  {k:'vm', id:'rVm', label:'Top speed',     unit:'m/s', min:0.5,  max:5,   step:0.1,  def:2.0,
-   note:'Fastest the hands and pads travel while the keeper is still balanced.'},
-  {k:'ac', id:'rAc', label:'Acceleration',  unit:'m/s2',min:2,    max:25,  step:0.5,  def:8,
-   note:'How sharply they get going. This is what decides the first few centimetres, so it matters far more on close shots than top speed does.'},
-  {k:'tc', id:'rTc', label:'Commit after',  unit:'s',   min:0.05, max:0.60,step:0.01, def:0.25,
-   note:'How long they stay balanced before throwing themselves at it. Earlier means more reach, sooner, with no way back.'},
-  {k:'vd', id:'rVd', label:'Dive speed',    unit:'m/s', min:1,    max:6,   step:0.1,  def:3.0,
-   note:'Speed once committed. Higher than top speed because gravity is helping and they no longer have to stay on their feet.'},
-  {k:'cm', id:'rCm', label:'Commit penalty',unit:'',    min:0.3,  max:1,   step:0.05, def:0.85,
-   note:'What a committed dive is worth against staying balanced, for the times it goes the wrong way. Applied only past the reach they could have made on their feet.'},
+   note:'How fast the shot travels. Sets how much time the position has to work with. Drag flicks measure 18-28 m/s.'},
+  {k:'rt', id:'rRt', label:'Reaction',      unit:'s',   min:0.10, max:0.45,step:0.01, def:0.25,
+   note:'Dead time before the covered area can start growing. Experienced keepers 250-260 ms, novices 300-320.'},
+  {k:'rs', id:'rRs', label:'Reach speed',   unit:'m/s', min:0.5,  max:5,   step:0.1,  def:2.5,
+   note:'How fast the reachable area grows once they are moving. A single rate rather than a stride-by-stride model: this is a coverage figure, not a simulation.'},
   {k:'ku', id:'rKu', label:'Reach up',      unit:'x',   min:0.2,  max:1.5, step:0.05, def:0.6,
-   note:'Reaching above the hands, against sideways. Below 1 because it is slower to fight gravity than to step.'},
-  {k:'kd', id:'rKd', label:'Reach down',    unit:'x',   min:0.2,  max:2,   step:0.05, def:1.15,
-   note:'Dropping to a ball, against sideways. Above 1 because falling is free.'},
+   note:'Reaching above the hands, against sideways. Below 1 because fighting gravity is slower than stepping.'},
   {k:'pb', id:'rPb', label:'Prediction bonus',unit:'s',  min:0.01, max:0.35,step:0.01, def:0.10,
-   note:'Time reading the shot is worth, give or take. Read it early and you are moving sooner; get wrong-footed and you lose the same again. This is the only thing making the edge soft rather than a hard line.'}
+   note:'Time reading the shot is worth, give or take. It is what makes the edge of the covered area fade rather than stop dead.'}
 ];
 const REACH={};
 REACH_PARAMS.forEach(p=>REACH[p.k]=p.def);
 let reachOn=false, reachFromUrl=false;
 
-/* Metres the contact surface can travel in t seconds. Nothing until the
-   keeper has reacted, then accelerating up to a top speed, then -- past
-   REACH.tc -- committing to a dive that goes further but cannot be recalled. */
-function reachAt(t){
-  const m=t-REACH.rt; if(m<=0) return 0;
-  const tAcc=REACH.vm/REACH.ac;
-  const stable=s=>s<=tAcc ? 0.5*REACH.ac*s*s : REACH.vm*(s-tAcc/2);
-  if(m<=REACH.tc) return stable(m);
-  return stable(REACH.tc) + REACH.vd*(m-REACH.tc);
-}
-/* The part of that reach the keeper can make without committing. */
-function extendAt(t){
-  const m=Math.min(t-REACH.rt, REACH.tc); if(m<=0) return 0;
-  const tAcc=REACH.vm/REACH.ac;
-  return m<=tAcc ? 0.5*REACH.ac*m*m : REACH.vm*(m-tAcc/2);
-}
+/* How far beyond the blocked silhouette the keeper could still get, in t
+   seconds. Nothing until they have reacted, then a straight line.
+
+   This was a four-phase curve -- accelerate, top speed, commit, dive -- which
+   was false precision twice over. It claimed to know things about a keeper's
+   push-off that nothing here can tell us, and measuring showed top speed was
+   inert anyway: acceleration reached it at exactly the commit time, so any
+   value above 2 m/s changed no output at all. One rate states what is actually
+   being claimed -- roughly how fast the covered area grows. */
+function reachAt(t){ return Math.max(0, t-REACH.rt)*REACH.rs; }
 /* Reach is not the same in every direction, so the distance is measured in a
    scaled metric rather than the curve being made direction-dependent: the two
    are equivalent for an elliptical envelope, and scaling the metric means the
@@ -1544,7 +1530,7 @@ function extendAt(t){
    the reference; down is cheaper than up, so they get separate scales and the
    envelope is two half-ellipses joined at the horizontal. */
 function scaledGap(dx,dy){
-  const kv = dy>0 ? REACH.ku : REACH.kd;
+  const kv = dy>0 ? REACH.ku : 1;          // sideways is the reference; only up is dearer
   return Math.hypot(dx, dy/kv*1);            // lateral is the 1.0 reference
 }
 /* Abramowitz and Stegun 7.1.26. Good to about 1.5e-7, ample when the input is
@@ -1557,21 +1543,8 @@ function erf(x){
 }
 const normCdf=z=>0.5*(1+erf(z/Math.SQRT2));
 
-/* How long the keeper needs in order to cover a given gap: the inverse of
-   reachAt, piece for piece. Needed because the uncertainty now lives on the
-   clock rather than on a distance. */
-function timeToReach(gap){
-  if(gap<=0) return REACH.rt;
-  const tAcc=REACH.vm/REACH.ac;
-  const dAcc=0.5*REACH.ac*tAcc*tAcc;
-  const stable=s=>s<=tAcc ? 0.5*REACH.ac*s*s : REACH.vm*(s-tAcc/2);
-  const dCommit=stable(REACH.tc);
-  let m;
-  if(gap<=dAcc)          m=Math.sqrt(2*gap/REACH.ac);      // still accelerating
-  else if(gap<=dCommit)  m=gap/REACH.vm + tAcc/2;          // at top speed
-  else                   m=REACH.tc + (gap-dCommit)/REACH.vd;  // committed dive
-  return REACH.rt+m;
-}
+/* The inverse, trivial now rather than piecewise. */
+function timeToReach(gap){ return REACH.rt + Math.max(0,gap)/REACH.rs; }
 /* Probability of getting something on it.
 
    Inside what the keeper already blocks it is 1: geometry, and it does not care
@@ -1595,7 +1568,7 @@ function saveProb(gap,t){
   if(gap<=0) return 1;
   const need=timeToReach(gap);
   const p=normCdf((t-need)/REACH.pb);
-  return (need-REACH.rt)<=REACH.tc ? p : p*REACH.cm;   // penalty only if it took a dive
+  return p;
 }
 
 /* ---- the sliders, built from the spec ---- */
@@ -1630,16 +1603,13 @@ function drawReachCharts(){
   if(!reachOn) return;
   const X0=22, Y0=12, W=170, H=64;
 
-  // reach against time, with the reaction dead zone and the commit point marked
+  // how far past the blocked area they could get, against time
   const tMax=1.0, rMax=Math.max(0.6, reachAt(tMax));
   const pts=[]; for(let i=0;i<=120;i++){ const t=tMax*i/120; pts.push([t,reachAt(t)]); }
-  const commitT=REACH.rt+REACH.tc;
   const xAt=t=>X0+(t/tMax)*W;
   el('reachChart').innerHTML=
     '<rect x="'+X0+'" y="'+Y0+'" width="'+((REACH.rt/tMax)*W).toFixed(1)+'" height="'+H+'" fill="rgba(255,107,107,.16)"/>'+
     '<text x="'+(X0+3)+'" y="'+(Y0+9)+'" fill="#8ea6b6" font-size="7">reacting</text>'+
-    (commitT<tMax?'<line x1="'+xAt(commitT).toFixed(1)+'" y1="'+Y0+'" x2="'+xAt(commitT).toFixed(1)+'" y2="'+(Y0+H)+'" stroke="#ffcf5c" stroke-dasharray="3 3"/>'+
-      '<text x="'+(xAt(commitT)+3).toFixed(1)+'" y="'+(Y0+9)+'" fill="#ffcf5c" font-size="7">commit</text>':'')+
     axes(X0,Y0,W,H,'1.0 s',rMax.toFixed(1)+' m')+
     '<path d="'+chartPath(pts,X0,Y0,W,H,tMax,rMax)+'" fill="none" stroke="var(--cyan)" stroke-width="1.6"/>';
 
@@ -1650,7 +1620,7 @@ function drawReachCharts(){
   // time the prediction bonus can buy rather than on a distance
   const gMax=Math.max(0.8, reachAt(t+3*REACH.pb));
   const pp=[]; for(let i=0;i<=120;i++){ const g=gMax*i/120; pp.push([g,saveProb(g,t)]); }
-  el('probCap').textContent='Chance of a save against gap to close, at '+(t*1000).toFixed(0)+' ms flight.';
+  el('probCap').textContent='Credit against gap to close, at '+(t*1000).toFixed(0)+' ms flight.';
   el('probChart').innerHTML=
     axes(X0,Y0,W,H,gMax.toFixed(1)+' m','1.0')+
     '<line x1="'+xAt2(reachAt(t),gMax,X0,W).toFixed(1)+'" y1="'+Y0+'" x2="'+xAt2(reachAt(t),gMax,X0,W).toFixed(1)+'" y2="'+(Y0+H)+'" stroke="#ffcf5c" stroke-dasharray="3 3"/>'+
@@ -1666,7 +1636,7 @@ let lastFlightTime=0;
 
 function setReach(on){
   reachOn=on;
-  el('reachBtn').textContent='Reach model: '+(on?'on':'off');
+  el('reachBtn').textContent='Include reach: '+(on?'on':'off');
   el('reachBtn').classList.toggle('on',on);
   el('reachBtn').setAttribute('aria-pressed',String(on));
   el('reachCtl').style.display=on?'block':'none';
