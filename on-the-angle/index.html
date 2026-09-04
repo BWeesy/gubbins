@@ -99,6 +99,8 @@
   button:hover{background:rgba(255,255,255,.11)}
   button.on{background:var(--cyanDim);border-color:var(--cyan);color:#eafffb}
   button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  .methodLink{display:block;margin-top:9px;font-size:11.5px;color:var(--muted);text-align:center;text-decoration:none;line-height:1.4}
+  .methodLink:hover{color:var(--cyan)}
   #bugLink{display:block;margin-top:9px;font-size:11.5px;color:var(--muted);text-align:center;text-decoration:none;line-height:1.4}
   #bugLink:hover{color:var(--cyan)}
   #supportLink{display:block;margin-top:9px;font-size:11.5px;color:var(--muted);text-align:center;text-decoration:none;line-height:1.4}
@@ -269,6 +271,7 @@
     <div class="glabel">Weighted coverage</div>
     <button id="reachBtn" style="width:100%" aria-pressed="false">Include reach: off</button>
     <p class="sub" style="margin:8px 0 0">Adds the goal you could still get to, weighted down by distance and by which part would get there.</p>
+    <a href="method.html" class="methodLink" id="methodLink2">How this figure is worked out</a>
     <div id="reachCtl" style="display:none">
       <p class="sub" style="margin:8px 0 4px">How far past the blocked area they could get, against time. Flat until they react, then steady.</p>
       <svg id="reachChart" viewBox="0 0 200 92" class="chart"></svg>
@@ -302,6 +305,7 @@
   <div class="group">
     <div class="glabel">Share</div>
     <button id="copyBtn" style="width:100%">Copy link</button>
+    <a href="method.html" class="methodLink" id="methodLink1">How this works</a>
     <a href="" target="_blank" rel="noopener" id="bugLink">Something look wrong? Report it</a>
     <a href="https://ko-fi.com/bweesy" target="_blank" rel="noopener" id="supportLink">Free for keepers everywhere — if it helped, ☕ buy me a coffee</a>
   </div>
@@ -1416,6 +1420,14 @@ function deviceString(){
 // A working link before anything is clicked, so a failure in the handler below
 // leaves the plain form rather than a dead anchor.
 el('bugLink').href=REPORT_FORM;
+/* Carry the current position across, so the way back lands on the position you
+   left rather than a fresh page. Written on click because the hash moves with
+   every slider. */
+document.querySelectorAll('.methodLink').forEach(a=>a.addEventListener('click',function(){
+  writeUrl();
+  this.href='method.html'+(location.hash.length>1?'?from='+encodeURIComponent(location.hash):'');
+}));
+
 el('bugLink').addEventListener('click',function(){
   writeUrl();
   const q=new URLSearchParams({usp:'pp_url'});
