@@ -99,7 +99,7 @@
   <div class="eq">time available = distance from ball to the keeper's plane / ball speed
 gap            = distance from that crossing point to the keeper, in their plane
 reach          = (time available - reaction) x reach speed
-credit         = 1 if the gap is zero, else the chance reach turns out to be enough</div>
+weight         = 1 if the gap is zero, else the chance reach turns out to be enough</div>
   <p>The <strong>reach up</strong> factor sets how far a keeper gets upwards against how far they get
      sideways. Below 1 makes high balls dearer than wide ones, above 1 the other way round; where a
      given keeper sits is their own, so it is a knob rather than a constant. The softness at the edge comes from the
@@ -129,7 +129,7 @@ credit         = 1 if the gap is zero, else the chance reach turns out to be eno
   <ul>
     <li>The ball flies in a straight line at a constant speed. Real drag flicks lift and swerve.</li>
     <li>The keeper is flat. Gloves held in front are nearer the ball than the pads, so they really do
-        cast a slightly larger shadow than they are credited with &mdash; a few per cent at close range.</li>
+        cast a slightly larger shadow than their weighting allows &mdash; a few per cent at close range.</li>
     <li>Reach grows at a single steady rate. Nobody accelerates like that; this is a coverage figure,
         not a stride-by-stride simulation.</li>
     <li>The stick weight of 0.35 is a judgement, not a measurement, and it rolls up two separate
