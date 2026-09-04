@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>On The Angle — how it works</title>
+<style>
+  :root{
+    --bg:#0b1220; --panel:rgba(16,26,40,.82); --edge:rgba(120,150,180,.22);
+    --ink:#e9f0f5; --muted:#8ea6b6; --cyan:#37d6c6; --amber:#ffcf5c;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6}
+  main{max-width:44rem;margin:0 auto;padding:28px 20px 72px}
+  a{color:var(--cyan)}
+  h1{font-size:1.5rem;margin:0 0 4px}
+  h2{font-size:.82rem;letter-spacing:.09em;text-transform:uppercase;color:var(--cyan);
+     margin:34px 0 10px;font-weight:600}
+  .lede{color:var(--muted);margin:0 0 6px}
+  .back{display:inline-block;margin-bottom:22px;font-size:.9rem;text-decoration:none}
+  .back:hover{text-decoration:underline}
+  table{width:100%;border-collapse:collapse;margin:10px 0 4px;font-size:.9rem}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--edge);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:.78rem;letter-spacing:.05em;text-transform:uppercase}
+  td.n{font-family:var(--mono);white-space:nowrap}
+  .eq{font-family:var(--mono);background:rgba(0,0,0,.28);border:1px solid var(--edge);
+      border-radius:8px;padding:12px 14px;margin:12px 0;font-size:.85rem;overflow-x:auto;
+      white-space:pre;line-height:1.7}
+  .warn{border:1px solid rgba(255,207,92,.4);background:rgba(255,207,92,.07);
+        border-radius:10px;padding:14px 16px;margin:14px 0}
+  .warn h3{margin:0 0 6px;font-size:.95rem;color:var(--amber)}
+  /* The equation lines are aligned with spaces, which needs a wide box. Rather
+     than make a phone drag sideways for the one block that matters, let it wrap. */
+  @media (max-width:34rem){ .eq{white-space:pre-wrap;overflow-wrap:anywhere} }
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--edge);
+         color:var(--muted);font-size:.85rem}
+</style>
+</head>
+<body>
+<main>
+  <a class="back" id="back" href="./">&larr; Back to the model</a>
+
+  <h1>How this works</h1>
+  <p class="lede">What the numbers on On The Angle are, where they come from, and what they are not.</p>
+
+  <h2>The two figures</h2>
+  <p>The page shows one of two things, depending on whether <strong>Include reach</strong> is on.</p>
+  <table>
+    <tr><th>Figure</th><th>Question it answers</th></tr>
+    <tr><td><strong>Goal face covered</strong></td>
+        <td>Standing exactly where they are, how much of the goal mouth is behind the keeper?
+            Purely geometric: a shadow cast from the ball.</td></tr>
+    <tr><td><strong>Weighted goal coverage</strong></td>
+        <td>The same, plus the parts of the goal they could still get to before the ball arrives &mdash;
+            each counting for less the further out of reach it is, and less again if the part that
+            would get there is a poor one to save with.</td></tr>
+  </table>
+
+  <h2>The keeper</h2>
+  <p>The keeper is built from body proportions and equipment sizes rather than drawn, so the shape
+     scales with the height slider. Kit dimensions are the maxima the rules allow, which is what a
+     senior keeper wears.</p>
+  <table>
+    <tr><th>Measurement</th><th class="n">Value</th><th>Source</th></tr>
+    <tr><td>Hand protector</td><td class="n">228 &times; 365 mm</td><td>FIH Rules of Hockey 2026, 4.1a</td></tr>
+    <tr><td>Leg guard width</td><td class="n">300 mm</td><td>FIH Rules of Hockey 2026, 4.2</td></tr>
+    <tr><td>Ball diameter</td><td class="n">~72 mm</td><td>FIH Rules of Hockey 2026, 3.1b</td></tr>
+    <tr><td>Body proportions</td><td class="n">fractions of height</td><td>Standard anthropometric tables</td></tr>
+    <tr><td>Spread height</td><td class="n">0.544 &times; standing</td><td>Measured: 0.98 m at 1.80 m</td></tr>
+    <tr><td>Stick length</td><td class="n">0.92 m</td><td>Typical. The rules cap the 51 mm ring and 737 g weight, not length.</td></tr>
+  </table>
+  <p>Two postures, chosen by you rather than inferred: <strong>set</strong>, hands in front at chest
+     height, and <strong>spread</strong>, gloves down on the floor either side of the pads. From the
+     shooter&rsquo;s view the forearms point almost straight at you and foreshorten to nothing, which is
+     why what blocks is pads, body, helmet and two glove faces.</p>
+
+  <h2>Not all of the keeper is equal</h2>
+  <p>Getting a pad or the body behind the ball is a different proposition from reaching it with the
+     stick, so each part carries a weight. The stick is drawn and counted in the weighted figure, but
+     it never contributes to the plain <em>goal face covered</em> number &mdash; treating it as solid
+     blocking area would flatter the position badly.</p>
+  <table>
+    <tr><th>Part</th><th class="n">Weight</th></tr>
+    <tr><td>Pads, body, helmet</td><td class="n">1.00</td></tr>
+    <tr><td>Gloves</td><td class="n">0.90</td></tr>
+    <tr><td>Stick</td><td class="n">0.35</td></tr>
+  </table>
+
+  <h2>Scoring a point on the goal</h2>
+  <p>For every point on the goal mouth, a line is drawn from the ball to that point and followed until
+     it crosses the plane the keeper is standing in. Both the distance the keeper would have to cover
+     and the time they have to do it are measured <em>there</em>, at the keeper, not at the goal line.</p>
+  <p>That matters more than it sounds. From close range a 10 cm movement by the keeper covers far more
+     than 10 cm of goal line, and the ball reaches the keeper well before it would reach the goal.
+     Measuring at the line would overstate the distance and hand them time they never get &mdash; and
+     both errors are worst on exactly the shots where the answer matters most.</p>
+  <div class="eq">time available = distance from ball to the keeper's plane / ball speed
+gap            = distance from that crossing point to the keeper, in their plane
+reach          = (time available - reaction) x reach speed
+credit         = 1 if the gap is zero, else the chance reach turns out to be enough</div>
+  <p>The <strong>reach up</strong> factor sets how far a keeper gets upwards against how far they get
+     sideways. Below 1 makes high balls dearer than wide ones, above 1 the other way round; where a
+     given keeper sits is their own, so it is a knob rather than a constant. The softness at the edge comes from the
+     <strong>prediction bonus</strong>: read the shot early and you are moving sooner, get wrong-footed
+     and you lose the same again, so the boundary fades instead of stopping dead. Set that to nothing
+     and the whole thing collapses back to the plain covered-or-open picture.</p>
+
+  <h2>The parameters</h2>
+  <table>
+    <tr><th>Parameter</th><th class="n">Default</th><th>Grounding</th></tr>
+    <tr><td>Ball speed</td><td class="n">22 m/s</td><td>Drag-flick studies measure 18&ndash;28 m/s</td></tr>
+    <tr><td>Reaction</td><td class="n">0.25 s</td><td>Experienced keepers 250&ndash;260 ms; novices 300&ndash;320</td></tr>
+    <tr><td>Reach speed</td><td class="n">1.5 m/s</td><td>Chosen, not measured. 38 cm in the first 250 ms of movement.</td></tr>
+    <tr><td>Reach up</td><td class="n">0.6&times;</td><td>Chosen, not measured. Differs by keeper, either side of 1.</td></tr>
+    <tr><td>Prediction bonus</td><td class="n">0.10 s</td><td>Keepers start moving anywhere from 50 to 350 ms before contact</td></tr>
+  </table>
+
+  <h2>What this is not</h2>
+  <div class="warn">
+    <h3>It is not a prediction of saves</h3>
+    <p>The weighted figure averages over the whole goal mouth as though shots land at random. They do
+       not: shooters aim at the corners and the gaps. At a position reading around 46% against a random
+       shot, the four corners come out nearer 2%. Read it as a measure of the <em>position</em>, never
+       as the chance of stopping the next shot.</p>
+  </div>
+  <p>Other things it does not do, all deliberate:</p>
+  <ul>
+    <li>The ball flies in a straight line at a constant speed. Real drag flicks lift and swerve.</li>
+    <li>The keeper is flat. Gloves held in front are nearer the ball than the pads, so they really do
+        cast a slightly larger shadow than they are credited with &mdash; a few per cent at close range.</li>
+    <li>Reach grows at a single steady rate. Nobody accelerates like that; this is a coverage figure,
+        not a stride-by-stride simulation.</li>
+    <li>The stick weight of 0.35 is a judgement, not a measurement, and it rolls up two separate
+        things: getting the stick there at all, and the deflection then going somewhere safe.</li>
+    <li>Nothing here has been validated against real saves. It is geometry with plausible constants
+        on top.</li>
+  </ul>
+
+  <h2>Sources</h2>
+  <ul>
+    <li><a href="https://www.fih.hockey/static-assets/pdf/fih-Rules-of-hockey-2026-final.pdf">FIH Rules of Hockey 2026</a> &mdash; equipment and ball dimensions</li>
+    <li><a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC3588699/">Kinematic pattern of the drag-flick</a> &mdash; ball speeds</li>
+    <li><a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC7739625/">Preparatory posture and diving save performance</a> &mdash; reaction and movement timings</li>
+  </ul>
+
+  <footer>
+    Found something wrong, or something that does not match what you see on the pitch?
+    <a href="https://docs.google.com/forms/d/e/1FAIpQLSfEaIkTozEvT8PLkXJcbsDMC1CBBzuoUfsBQo7sFXmFNU-QEw/viewform" target="_blank" rel="noopener">Tell us</a>.
+  </footer>
+</main>
+<script>
+/* Come back to the position you left rather than a fresh page: the model hands
+   its share link over in "from", and it goes straight back onto the link home. */
+(function(){
+  var from=new URLSearchParams(location.search).get('from');
+  if(from && from.charAt(0)==='#') document.getElementById('back').setAttribute('href','./'+from);
+})();
+</script>
+</body>
+</html>
