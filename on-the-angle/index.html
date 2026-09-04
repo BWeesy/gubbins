@@ -292,7 +292,7 @@
 
   <div class="group">
     <div class="glabel">Heatmap</div>
-    <p class="sub" style="margin:0 0 8px">Coverage % from every shot spot in the D, for the current keeper setup. Recompute after changes.</p>
+    <p class="sub" style="margin:0 0 8px" id="heatCap">Coverage % from every shot spot in the D, for the current keeper setup. Recompute after changes.</p>
     <div class="seg">
       <button id="heatCompute">Compute</button>
       <button id="heatClear">Clear</button>
@@ -946,12 +946,18 @@ function computeHeatmap(){
   const Kcur = lastState ? lastState.K.clone() : (keeperMode==='free'
     ? new THREE.Vector2(+el('kx').value,+el('kz').value)
     : guidedKeeper(new THREE.Vector2(+el('bx').value,+el('bz').value), off, priority, sil));
+  // With reach included the sweep asks the same question as the headline --
+  // weighted coverage -- rather than the static block. Face mode only, because
+  // that is where the weighted figure is shown; weighting the sweep in
+  // ground-line mode would contradict the panel beside it.
+  const weighted = reachOn && coverageMode==='face';
   const sbx=bxBall, sbz=bzBall, step=0.5, y=0.009, pos=[], col=[];
   for(let x=-16;x<16;x+=step) for(let z=0.4;z<16;z+=step){
     const cx=x+step/2, cz=z+step/2; if(!insideD(cx,cz)) continue;
     const S=new THREE.Vector2(cx,cz);
     let pct;
-    if(coverageMode==='face'){ bxBall=cx; bzBall=cz; const f=faceCoverage(S,Kcur,sil.poly); pct=f?f.pct:0; }
+    if(weighted){ pct=100*weightedCoverage(S,Kcur,sil.parts); }
+    else if(coverageMode==='face'){ bxBall=cx; bzBall=cz; const f=faceCoverage(S,Kcur,sil.poly); pct=f?f.pct:0; }
     else pct=groundPct(S,Kcur,sil);
     const c=heatColor(Math.max(0,Math.min(1,pct/100)));
     const q=[[x,z],[x+step,z],[x+step,z+step],[x,z],[x+step,z+step],[x,z+step]];
@@ -1361,6 +1367,7 @@ function setCoverageMode(m){
   coverageMode=m;
   el('covGround').classList.toggle('on',m==='ground');
   el('covFace').classList.toggle('on',m==='face');
+  updateHeatCaption();
   update();
 }
 el('covGround').addEventListener('click',()=>setCoverageMode('ground'));
@@ -1634,12 +1641,22 @@ function drawReachCharts(){
 function xAt2(v,vMax,x0,w){ return x0+(Math.min(v,vMax)/vMax)*w; }
 let lastFlightTime=0;
 
+/* The sweep only weights where the weighted figure is actually shown, which is
+   face mode. Driven from both the toggle and the coverage mode, because it was
+   wired to the toggle alone and then claimed "weighted" in ground-line mode
+   while the panel beside it said otherwise. */
+function updateHeatCaption(){
+  const w = reachOn && coverageMode==='face';
+  el('heatCap').textContent=(w?'Weighted coverage':'Static coverage')+
+    ' % from every shot spot in the D, for the current keeper setup. Recompute after changes.';
+}
 function setReach(on){
   reachOn=on;
   el('reachBtn').textContent='Include reach: '+(on?'on':'off');
   el('reachBtn').classList.toggle('on',on);
   el('reachBtn').setAttribute('aria-pressed',String(on));
   el('reachCtl').style.display=on?'block':'none';
+  updateHeatCaption();
   drawReachCharts(); update();
 }
 el('reachBtn').addEventListener('click',()=>setReach(!reachOn));
@@ -1683,17 +1700,19 @@ function bestSaveAt(s,h,parts,t){
    close-range shots where it matters most. */
 let lastField=null;
 const FIELD_STEP=0.06;                                    // metres across the goal mouth
-function buildSaveField(B,K,parts){
+/* Credit for any point on the goal mouth, for one shot and one keeper position.
+   Shared so the picture on the goal and the sweep across the pitch cannot drift
+   apart: they are the same question asked at different resolutions. */
+function fieldSampler(B,K,parts){
   const Bv=new THREE.Vector3(B.x,BALL_R,B.y);
   const Kp=new THREE.Vector3(K.x,0,K.y);
   const n=new THREE.Vector3(B.x-K.x,0,B.y-K.y);
   if(n.lengthSq()<1e-9) return null;
   n.normalize();
   const perp=new THREE.Vector3(n.z,0,-n.x);
-  const pos=[], col=[], P=new THREE.Vector3(), Q=new THREE.Vector3();
-  const cells=[]; let sum=0, n2=0;
   const denomBase=Kp.clone().sub(Bv).dot(n);
-  const cellP=(X,Y)=>{
+  const P=new THREE.Vector3(), Q=new THREE.Vector3();
+  return (X,Y)=>{
     P.set(X,Y,0);
     const dir=P.clone().sub(Bv);
     const den=dir.dot(n);
@@ -1702,12 +1721,33 @@ function buildSaveField(B,K,parts){
     if(u<=0) return 0;                                     // goal is behind the keeper's plane
     Q.copy(Bv).addScaledVector(dir,u);
     const t=Q.distanceTo(Bv)/REACH.bs;
-    return bestSaveAt(Q.clone().sub(Kp).dot(perp), Q.y, parts, t);
+    return Math.max(0,Math.min(1,bestSaveAt(Q.clone().sub(Kp).dot(perp), Q.y, parts, t)));
   };
+}
+/* Mean credit over the whole goal mouth: the figure the panel shows. Coarser
+   than the drawn field, because the pitch sweep asks for it once per shot spot
+   and the cell counts multiply. */
+const HEAT_FIELD_STEP=0.15;
+function weightedCoverage(B,K,parts){
+  const at=fieldSampler(B,K,parts);
+  if(!at) return 0;
+  let sum=0, n=0;
+  for(let X=-HALF; X<HALF-1e-9; X+=HEAT_FIELD_STEP){
+    for(let Y=0; Y<GOAL_H-1e-9; Y+=HEAT_FIELD_STEP){
+      const x1=Math.min(X+HEAT_FIELD_STEP,HALF), y1=Math.min(Y+HEAT_FIELD_STEP,GOAL_H);
+      sum+=at((X+x1)/2,(Y+y1)/2); n++;
+    }
+  }
+  return n?sum/n:0;
+}
+function buildSaveField(B,K,parts){
+  const at=fieldSampler(B,K,parts);
+  if(!at) return null;
+  const pos=[], col=[], cells=[]; let sum=0, n2=0;
   for(let X=-HALF; X<HALF-1e-9; X+=FIELD_STEP){
     for(let Y=0; Y<GOAL_H-1e-9; Y+=FIELD_STEP){
       const x1=Math.min(X+FIELD_STEP,HALF), y1=Math.min(Y+FIELD_STEP,GOAL_H);
-      const pv=Math.max(0,Math.min(1,cellP((X+x1)/2,(Y+y1)/2)));
+      const pv=at((X+x1)/2,(Y+y1)/2);
       sum+=pv; n2++; cells.push([X,Y,x1,y1,pv]);
       const c=heatColor(pv);
       const quad=[[X,Y],[x1,Y],[x1,y1],[X,Y],[x1,y1],[X,y1]];
