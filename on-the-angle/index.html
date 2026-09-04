@@ -273,9 +273,9 @@
     <p class="sub" style="margin:8px 0 0">Adds the goal you could still get to, weighted down by distance and by which part would get there.</p>
     <a href="method.html" class="methodLink" id="methodLink2">How this figure is worked out</a>
     <div id="reachCtl" style="display:none">
-      <p class="sub" style="margin:8px 0 4px">How far past the blocked area they could get, against time. Flat until they react, then steady.</p>
+      <p class="sub" style="margin:8px 0 4px">How far the keeper can reach, in metres, against time since the ball was hit. Zero through the shaded reaction time, then reach speed from there.</p>
       <svg id="reachChart" viewBox="0 0 200 92" class="chart"></svg>
-      <p class="sub" style="margin:8px 0 4px" id="probCap">Credit given, against how far out of reach it is.</p>
+      <p class="sub" style="margin:8px 0 4px" id="probCap">Credit a point on the goal earns, 0 to 1, against how many metres it sits outside the blocked area.</p>
       <svg id="probChart" viewBox="0 0 200 92" class="chart"></svg>
       <div id="reachSliders"></div>
     </div>
@@ -1603,7 +1603,7 @@ REACH_PARAMS.forEach(p=>el(p.id).addEventListener('input',()=>{
 
 /* ---- the charts -------------------------------------------------------
    Two small plots of what the sliders are actually doing, because a curve
-   built from six interacting numbers is not something anyone can hold in
+   built from five interacting numbers is not something anyone can hold in
    their head. Redrawn on every slider move, which is cheap: a couple of
    hundred points of SVG path. */
 function chartPath(pts,x0,y0,w,h,xMax,yMax){
@@ -1639,7 +1639,7 @@ function drawReachCharts(){
   // time the prediction bonus can buy rather than on a distance
   const gMax=Math.max(0.8, reachAt(t+3*REACH.pb));
   const pp=[]; for(let i=0;i<=120;i++){ const g=gMax*i/120; pp.push([g,saveProb(g,t)]); }
-  el('probCap').textContent='Credit against gap to close, at '+(t*1000).toFixed(0)+' ms flight.';
+  el('probCap').textContent="Credit a point on the goal earns, 0 to 1, against how many metres it sits outside the blocked area. The dashed line is how far the keeper gets in this shot's "+(t*1000).toFixed(0)+" ms of flight.";
   el('probChart').innerHTML=
     axes(X0,Y0,W,H,gMax.toFixed(1)+' m','1.0')+
     '<line x1="'+xAt2(reachAt(t),gMax,X0,W).toFixed(1)+'" y1="'+Y0+'" x2="'+xAt2(reachAt(t),gMax,X0,W).toFixed(1)+'" y2="'+(Y0+H)+'" stroke="#ffcf5c" stroke-dasharray="3 3"/>'+
