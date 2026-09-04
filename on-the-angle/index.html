@@ -268,7 +268,7 @@
   <div class="group">
     <div class="glabel">Weighted coverage</div>
     <button id="reachBtn" style="width:100%" aria-pressed="false">Include reach: off</button>
-    <p class="sub" style="margin:8px 0 0">Adds the goal you could still get to, weighted down by distance and by which part would get there. A coverage figure, not a prediction of saves.</p>
+    <p class="sub" style="margin:8px 0 0">Adds the goal you could still get to, weighted down by distance and by which part would get there.</p>
     <div id="reachCtl" style="display:none">
       <p class="sub" style="margin:8px 0 4px">How far past the blocked area they could get, against time. Flat until they react, then steady.</p>
       <svg id="reachChart" viewBox="0 0 200 92" class="chart"></svg>
@@ -1503,11 +1503,11 @@ const REACH_PARAMS=[
   {k:'rt', id:'rRt', label:'Reaction',      unit:'s',   min:0.10, max:0.45,step:0.01, def:0.25,
    note:'Dead time before the covered area can start growing. Experienced keepers 250-260 ms, novices 300-320.'},
   {k:'rs', id:'rRs', label:'Reach speed',   unit:'m/s', min:0.5,  max:5,   step:0.1,  def:2.5,
-   note:'How fast the reachable area grows once they are moving. A single rate rather than a stride-by-stride model: this is a coverage figure, not a simulation.'},
+   note:'How fast the covered area grows once they are moving.'},
   {k:'ku', id:'rKu', label:'Reach up',      unit:'x',   min:0.2,  max:1.5, step:0.05, def:0.6,
    note:'Reaching above the hands, against sideways. Below 1 because fighting gravity is slower than stepping.'},
   {k:'pb', id:'rPb', label:'Prediction bonus',unit:'s',  min:0.01, max:0.35,step:0.01, def:0.10,
-   note:'Time reading the shot is worth, give or take. It is what makes the edge of the covered area fade rather than stop dead.'}
+   note:'Time reading the shot is worth, give or take. Softens the edge of the covered area.'}
 ];
 const REACH={};
 REACH_PARAMS.forEach(p=>REACH[p.k]=p.def);
