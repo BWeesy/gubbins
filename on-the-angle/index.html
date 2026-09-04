@@ -1524,7 +1524,7 @@ const REACH_PARAMS=[
   {k:'rs', id:'rRs', label:'Reach speed',   unit:'m/s', min:0.5,  max:4,   step:0.1,  def:1.5,
    note:'How fast the covered area grows once they are moving.'},
   {k:'ku', id:'rKu', label:'Reach up',      unit:'x',   min:0.2,  max:1.5, step:0.05, def:0.6,
-   note:'Reaching above the hands, against sideways. Below 1 because fighting gravity is slower than stepping.'},
+   note:'Reaching up against reaching sideways. Below 1 if high balls are harder, above 1 if they are not.'},
   {k:'pb', id:'rPb', label:'Prediction bonus',unit:'s',  min:0.01, max:0.35,step:0.01, def:0.10,
    note:'Time reading the shot is worth, give or take. Softens the edge of the covered area.'}
 ];

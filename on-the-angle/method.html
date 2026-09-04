@@ -100,8 +100,9 @@
 gap            = distance from that crossing point to the keeper, in their plane
 reach          = (time available - reaction) x reach speed
 credit         = 1 if the gap is zero, else the chance reach turns out to be enough</div>
-  <p>Vertical gaps count as dearer than sideways ones by the <strong>reach up</strong> factor, because
-     fighting gravity is slower than stepping. The softness at the edge comes from the
+  <p>The <strong>reach up</strong> factor sets how far a keeper gets upwards against how far they get
+     sideways. Below 1 makes high balls dearer than wide ones, above 1 the other way round; where a
+     given keeper sits is their own, so it is a knob rather than a constant. The softness at the edge comes from the
      <strong>prediction bonus</strong>: read the shot early and you are moving sooner, get wrong-footed
      and you lose the same again, so the boundary fades instead of stopping dead. Set that to nothing
      and the whole thing collapses back to the plain covered-or-open picture.</p>
@@ -112,7 +113,7 @@ credit         = 1 if the gap is zero, else the chance reach turns out to be eno
     <tr><td>Ball speed</td><td class="n">22 m/s</td><td>Drag-flick studies measure 18&ndash;28 m/s</td></tr>
     <tr><td>Reaction</td><td class="n">0.25 s</td><td>Experienced keepers 250&ndash;260 ms; novices 300&ndash;320</td></tr>
     <tr><td>Reach speed</td><td class="n">1.5 m/s</td><td>Chosen, not measured. 38 cm in the first 250 ms of movement.</td></tr>
-    <tr><td>Reach up</td><td class="n">0.6&times;</td><td>Chosen, not measured</td></tr>
+    <tr><td>Reach up</td><td class="n">0.6&times;</td><td>Chosen, not measured. Differs by keeper, either side of 1.</td></tr>
     <tr><td>Prediction bonus</td><td class="n">0.10 s</td><td>Keepers start moving anywhere from 50 to 350 ms before contact</td></tr>
   </table>
 
