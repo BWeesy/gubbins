@@ -4,6 +4,10 @@ An interactive 3D model of field-hockey goalkeeper positioning: place the ball
 anywhere in the circle, move the keeper, and see how much of the goal mouth the
 keeper actually covers from the shooter's point of view.
 
+Defenders can be switched on and put anywhere in the D as well -- a body on the
+back post in open play, or a whole short-corner set -- and the mouth then shows
+what the keeper covers and what the outfielders take off them.
+
 Live at <https://bweesy.github.io/gubbins/on-the-angle/>.
 
 Everything lives in `index.html` -- one self-contained page with no build step.
