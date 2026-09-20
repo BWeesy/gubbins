@@ -1160,16 +1160,75 @@ function ensureKeeperMesh(parts){
 /* The same trick for the defenders, one Group each. Their positions change
    every frame a slider moves and their shapes almost never do, so the meshes
    are rebuilt off the shapes alone and merely re-placed the rest of the time. */
+/* ---- squad numbers -----------------------------------------------------
+   A number on the chest, so a body out on the pitch can be matched to its
+   chip in the panel without counting across the D.
+
+   Decoration, and kept out of the parts list on purpose: parts are what the
+   coverage maths measures, and a badge must not add a square centimetre to
+   what counts as blocked.
+
+   Glyphs are drawn once and cached by digit, the materials with them, and
+   both are flagged shared -- rebuilding the meshes must not take the textures
+   with it, which is the trap the hatch fell into. */
+const numTex=new Map(), numMats=new Map();
+function numberMaterial(n){
+  if(numMats.has(n)) return numMats.get(n);
+  const c=document.createElement('canvas'); c.width=c.height=64;
+  const g=c.getContext('2d');
+  g.font='bold 50px '+'-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif';
+  g.textAlign='center'; g.textBaseline='middle';
+  // Halo first, then the digit: a dark glyph alone disappears wherever the
+  // kit falls into shadow, and the shirt is light enough that a light glyph
+  // alone would do the same in full light.
+  g.lineWidth=7; g.strokeStyle='rgba(255,255,255,0.9)'; g.strokeText(n,32,34);
+  g.fillStyle='#1b2233'; g.fillText(n,32,34);
+  const t=new THREE.CanvasTexture(c); t.magFilter=THREE.LinearFilter;
+  numTex.set(n,t); SHARED_TEX.add(t);
+  const m=new THREE.MeshBasicMaterial({map:t, transparent:true, depthWrite:false});
+  numMats.set(n,m); return m;
+}
+/* The chest is wherever the body part actually is, which is not the same
+   height in the two roles, so it is read off the silhouette rather than
+   written out twice.
+
+   One badge per face. The slab's local -z is the side the ball is on (see
+   faceAngle), so that one is turned to look back down the shot; the +z twin
+   is there so the number still reads from the Behind goal view rather than
+   coming out mirrored. */
+const BADGE_Z=0.086;                               // just proud of the 0.16 m slab
+function chestBadges(sil,n){
+  const body=sil.parts.find(p=>p.kind==='dBody'); if(!body) return [];
+  const xs=body.poly.map(q=>q[0]), ys=body.poly.map(q=>q[1]);
+  const w=Math.max(...xs)-Math.min(...xs), h=Math.max(...ys)-Math.min(...ys);
+  const s=Math.min(0.24, h*0.8, w*0.8);
+  const y=(Math.min(...ys)+Math.max(...ys))/2;
+  const geo=()=>new THREE.PlaneGeometry(s,s);
+  const front=new THREE.Mesh(geo(), numberMaterial(n));
+  front.position.set(0,y,-BADGE_Z); front.rotation.y=Math.PI;
+  const back=new THREE.Mesh(geo(), numberMaterial(n));
+  back.position.set(0,y,BADGE_Z);
+  return [front,back];
+}
+
 let defSig='';
 function ensureDefenderMeshes(sils){
   const sig=JSON.stringify(sils.map(s=>s.parts.map(p=>[p.kind,p.poly])));
   if(sig===defSig) return;
+  const keep=[...partMats.values(), ...numMats.values()];
   for(let i=defGroup.children.length-1;i>=0;i--){
     const g=defGroup.children[i];
-    disposeChildren(g,[...partMats.values()]);
+    disposeChildren(g,keep);
     defGroup.remove(g);
   }
-  sils.forEach(s=>{ const g=new THREE.Group(); s.parts.forEach(p=>g.add(partMesh(p))); defGroup.add(g); });
+  // The badges go in flat rather than in a sub-group: disposeChildren only
+  // reaches a group's own children, so a nested one would leak its geometry.
+  sils.forEach((s,i)=>{
+    const g=new THREE.Group();
+    s.parts.forEach(p=>g.add(partMesh(p)));
+    chestBadges(s,i+1).forEach(b=>g.add(b));
+    defGroup.add(g);
+  });
   defSig=sig;
 }
 
