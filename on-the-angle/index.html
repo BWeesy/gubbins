@@ -1845,10 +1845,13 @@ function defSet(k){
   let s=[];
   if(k==='posts')  s=[{x:-POST_IN,z:0.05,role:'post'},{x:POST_IN,z:0.05,role:'post'}];
   if(k==='back')   s=[{x:far,z:0.05,role:'post'}];
-  // A short-corner set: the first runner charging the top of the D, a body on
-  // each post, and a trailer filling the lane the runner left.
-  if(k==='corner') s=[{x:0,z:8.0,role:'runner'},{x:-POST_IN,z:0.05,role:'post'},
-                      {x:POST_IN,z:0.05,role:'post'},{x:-1.4,z:3.2,role:'runner'}];
+  // A short-corner set, in the order the jobs are called on the pitch. The
+  // badge on the chest is the array index, so this list is the numbering:
+  // running one goes furthest and charges the striker, running two follows
+  // behind and to the side for the slip. The post men are 3 and 4 -- which
+  // of them is which matters to nobody.
+  if(k==='corner') s=[{x:0,z:8.0,role:'runner'},{x:-1.4,z:3.2,role:'runner'},
+                      {x:-POST_IN,z:0.05,role:'post'},{x:POST_IN,z:0.05,role:'post'}];
   return s.map(d=>{ const P=clampToD(d.x,d.z);
     return {x:P.x, z:P.y, role:d.role, blk:DEF_BLOCK[d.role]}; });
 }
