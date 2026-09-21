@@ -284,6 +284,9 @@
       <input class="slider" id="dw" type="range" min="0.25" max="0.9" step="0.01" value="0.45">
       <div class="row"><label>Height</label><span class="val" id="dhVal"></span></div>
       <input class="slider" id="dh" type="range" min="1.4" max="2" step="0.01" value="1.78">
+      <div class="row"><label>Block chance</label><span class="val" id="dbkVal"></span></div>
+      <input class="slider" id="dbk" type="range" min="0.1" max="1" step="0.05" value="0.75">
+      <p class="sub" style="margin:-4px 0 0">Odds a body in the line actually stops it — a charging runner is not a wall. Shows in the save-chance picture, under Reach model.</p>
     </div>
   </div>
 
@@ -1406,7 +1409,7 @@ function update(){
   // ---- defenders ----
   // Silhouettes and clamped positions first, so everything below can treat
   // the keeper and the outfielders as one list of bodies in the way.
-  const dw=+el('dw').value, dh=+el('dh').value;
+  const dw=+el('dw').value, dh=+el('dh').value, dbk=+el('dbk').value;
   const defs=defendersOn?defenders.map(d=>{
     const P=clampToD(d.x,d.z);
     return {P, role:d.role, sil:defenderSilhouette(dw,dh,d.role)};
@@ -1506,7 +1509,7 @@ function update(){
       if(reachOn){
         // With the reach model on, the binary block gives way to the shaded
         // field: one picture at a time, so a colour never means two things.
-        const f=buildSaveField(B,K,sil.parts,defFaces);
+        const f=buildSaveField(B,K,sil.parts,defFaces,dbk);
         if(f) viz.add(f);
       } else if(multi){
         // Several bodies: open net and the defenders' share both come out of
@@ -1568,6 +1571,7 @@ function update(){
   el('khVal').textContent=kh.toFixed(2)+' m';
   el('dwVal').textContent=dw.toFixed(2)+' m';
   el('dhVal').textContent=dh.toFixed(2)+' m';
+  el('dbkVal').textContent=Math.round(dbk*100)+'%';
   // The clamp keeps a defender in the D even when the slider has been dragged
   // past it, so the readout is the position that is actually being modelled.
   { const sd=defenders[defSel];
@@ -1578,7 +1582,12 @@ function update(){
   el('cvNote').innerHTML = (useFace
     ? '% of the whole goal <b>face</b> (3.66 × 2.14 m) covered — keeper modelled as a wall '+kh.toFixed(2)+' m tall. Includes lifted shots.'
     : '% of goal <b>width</b> covered against a flat shot along the ground — height isn\'t counted.')
-    + (defs.length?' Darker shading is net a defender takes, not the keeper.':'');
+    // Which sentence depends on which picture is up: with the reach model on
+    // the two greens are gone and the shading is the save field, where the
+    // block chance is the thing actually doing the work.
+    + (defs.length?(reachOn&&useFace
+        ? ' Defenders turn '+Math.round(dbk*100)+'% of what reaches them; the rest is still the keeper\'s to save.'
+        : ' Darker shading is net a defender stands in the way of, not the keeper.'):'');
   el('rNear').textContent=(nearGap*100).toFixed(0)+' cm';
   el('rFar').textContent=(farGap*100).toFixed(0)+' cm';
   el('rBias').textContent=Math.abs(biasDeg)<0.3?'on line'
@@ -1891,7 +1900,7 @@ document.querySelectorAll('#defRoleSeg button').forEach(b=>b.addEventListener('c
   const P=clampToD(+el('dx').value, +el('dz').value);
   d.x=P.x; d.z=P.y; update();
 }));
-['dw','dh'].forEach(id=>el(id).addEventListener('input',update));
+['dw','dh','dbk'].forEach(id=>el(id).addEventListener('input',update));
 
 /* The palette drives CSS custom properties, the three materials rebuilt by
    update(), the billboard canvas and the heatmap ramp, so switching it is
@@ -2193,7 +2202,7 @@ function bestSaveAt(s,h,parts,t){
    close-range shots where it matters most. */
 let lastField=null;
 const FIELD_STEP=0.06;                                    // metres across the goal mouth
-function buildSaveField(B,K,parts,defPolys){
+function buildSaveField(B,K,parts,defPolys,defBlock){
   const Bv=new THREE.Vector3(B.x,BALL_R,B.y);
   const Kp=new THREE.Vector3(K.x,0,K.y);
   const n=new THREE.Vector3(B.x-K.x,0,B.y-K.y);
@@ -2203,11 +2212,9 @@ function buildSaveField(B,K,parts,defPolys){
   const pos=[], col=[], P=new THREE.Vector3(), Q=new THREE.Vector3();
   const cells=[]; let sum=0, n2=0;
   const denomBase=Kp.clone().sub(Bv).dot(n);
-  const cellP=(X,Y)=>{
-    // A defender in the way is not a reach problem. They are standing still
-    // in the flight path: the ball meets a body, and the question the
-    // keeper's model answers never arises.
-    if(defPolys) for(const dp of defPolys) if(pointInPoly(dp,X,Y)) return 1;
+  /* What the keeper alone makes of a ball aimed here: their reach problem,
+     unchanged, and 0 where the geometry says there is no shot to answer. */
+  const keeperP=(X,Y)=>{
     P.set(X,Y,0);
     const dir=P.clone().sub(Bv);
     const den=dir.dot(n);
@@ -2217,6 +2224,23 @@ function buildSaveField(B,K,parts,defPolys){
     Q.copy(Bv).addScaledVector(dir,u);
     const t=Q.distanceTo(Bv)/REACH.bs;
     return bestSaveAt(Q.clone().sub(Kp).dot(perp), Q.y, parts, t);
+  };
+  const cellP=(X,Y)=>{
+    /* A defender in the line is not a reach problem -- they are standing in
+       the flight path already -- but nor are they a wall. The keeper's parts
+       each carry their own odds of turning a ball they meet; a defender gets
+       one number for the whole body, because there is no useful sense in
+       which an outfielder's hip is a better block than their shin.
+
+       Two bodies in line are two separate things to beat, so they compound;
+       and a ball that beats them all is still the keeper's to save, which is
+       what stops a runner charging out ever making the picture worse than
+       leaving the keeper to it. */
+    let through=1;
+    if(defPolys) for(const dp of defPolys) if(pointInPoly(dp,X,Y)) through*=(1-defBlock);
+    const pd=1-through;
+    if(pd>=0.9999) return 1;
+    return pd + (1-pd)*keeperP(X,Y);
   };
   for(let X=-HALF; X<HALF-1e-9; X+=FIELD_STEP){
     for(let Y=0; Y<GOAL_H-1e-9; Y+=FIELD_STEP){
@@ -2245,7 +2269,7 @@ function serialise(){
     // The defenders as one field: x~z~role per body, bodies separated by "!".
     // Both characters survive encodeURIComponent, so the hash stays readable.
     // Absent on an older link, which lands on none, exactly as pal did.
-    df:defendersOn?1:0, dw:+el('dw').value, dh:+el('dh').value,
+    df:defendersOn?1:0, dw:+el('dw').value, dh:+el('dh').value, dbk:+el('dbk').value,
     dfn:defenders.map(d=>[d.x.toFixed(2),d.z.toFixed(2),d.role==='runner'?'r':'p'].join('~')).join('!'),
     // Reach parameters as one field, ordered by REACH_PARAMS, so a tuned model
     // travels with the link. Absent on an older link, which falls back to the
@@ -2277,7 +2301,7 @@ function readUrl(){
     el('off').max=m; if(+el('off').value>m) el('off').value=m;
     el('offMaxVal').textContent=m.toFixed(1)+' m';
   }
-  setv('dw',p.dw); setv('dh',p.dh);
+  setv('dw',p.dw); setv('dh',p.dh); setv('dbk',p.dbk);
   if(p.dfn){
     defenders=p.dfn.split('!').slice(0,DEF_MAX).map(s=>{
       // Empty fields as well as unparseable ones: "+''" is 0, not NaN, so a
