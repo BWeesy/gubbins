@@ -2375,11 +2375,19 @@ function readUrl(){
       reachFromUrl=true;
     }
   }
-  if(p.cm) coordMode=p.cm;
-  if(p.km) keeperMode=p.km;
-  if(p.pr) priority=p.pr;
-  if(p.cov) coverageMode=p.cov;
-  if(p.po) posture=(p.po==='spread'?'spread':'set');
+  /* The enumerated fields, checked against what they can actually be. Taken
+     at face value, an unknown value reaches a setter that compares it against
+     each legal one and matches none -- which for the coordinate and keeper
+     modes hides both halves of the control, so "#cm=xyz" left a hand-edited
+     link with no ball sliders at all. An unreadable field should land on the
+     default, the way po, pal, rch and cam already do. Absent or empty keeps
+     whatever is current, which is what the old guards did. */
+  const pick=(v,allowed,fallback)=>allowed.indexOf(v)>=0?v:fallback;
+  coordMode   =pick(p.cm, ['cart','polar'],        coordMode);
+  keeperMode  =pick(p.km, ['bis','free'],          keeperMode);
+  priority    =pick(p.pr, ['near','centre','far'], priority);
+  coverageMode=pick(p.cov,['ground','face'],       coverageMode);
+  posture     =pick(p.po, ['set','spread'],        posture);
   if(p.cam){
     const c=p.cam.split('~').map(Number);
     if(c.length===6&&c.every(Number.isFinite)){
