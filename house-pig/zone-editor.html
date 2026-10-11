@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pig Zone Editor</title>
+<style>
+  :root { --bg:#f6f6f4; --fg:#1d1d1b; --muted:#6b6b66; --accent:#e8590c; --card:#fff; --line:#d8d8d2; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --fg:#ececea; --muted:#9a9a94; --card:#20201e; --line:#3a3a36; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, sans-serif; padding:16px; }
+  main { max-width:720px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p { margin:0 0 12px; color:var(--muted); }
+  .map { position:relative; width:100%; background:#2a2a28; border-radius:10px; overflow:hidden; touch-action:none; user-select:none; }
+  .map img { display:block; width:100%; height:auto; }
+  .map svg { position:absolute; inset:0; width:100%; height:100%; }
+  .zone { fill:rgba(232,89,12,.28); stroke:var(--accent); stroke-width:2.5; cursor:move; }
+  .handle { fill:#fff; stroke:var(--accent); stroke-width:2; cursor:nwse-resize; }
+  .grid { stroke:rgba(255,255,255,.18); stroke-width:1; }
+  .dock { fill:none; stroke:#fff; stroke-width:2; }
+  .label { fill:#fff; font-size:13px; font-weight:600; paint-order:stroke; stroke:rgba(0,0,0,.6); stroke-width:3px; }
+  .out { margin-top:12px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; }
+  code { font-size:16px; font-weight:600; }
+  button { font:inherit; padding:6px 14px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); }
+  .size { color:var(--muted); }
+  .setup { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .setup code { font-size:14px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pig zone editor</h1>
+  <p>Drag the orange box to move it, or drag a corner to resize it. Grid squares are 1&nbsp;m. Copy the numbers into "Litter zone" on the House Pig dashboard.</p>
+
+  <div class="setup" id="setup" hidden>
+    <p><strong>No local map found.</strong> This page reads your map from two files next to it that are kept out of git:</p>
+    <p><code>map.local.js</code> (copy <code>map.example.js</code> and fill it in) and the map image it names. See <code>README.md</code> for how to get both.</p>
+  </div>
+
+  <div id="editor" hidden>
+    <div class="map" id="map">
+      <img id="img" alt="Vacuum map">
+      <svg id="svg"></svg>
+    </div>
+    <div class="out">
+      <code id="coords"></code>
+      <span class="size" id="size"></span>
+      <button id="copy">Copy</button>
+      <button class="ghost" id="reset">Reset to saved</button>
+    </div>
+  </div>
+</main>
+
+<!-- Personal map settings. Gitignored; a missing file just shows the setup note. -->
+<script src="map.local.js"></script>
+<script>
+  const cfg = window.PIG_MAP;
+  if (!cfg) {
+    document.getElementById('setup').hidden = false;
+  } else {
+    start(cfg);
+  }
+
+  function start(cfg) {
+    // Map millimetres to image pixels: px = originX + scale*x, py = originY - scale*y.
+    const { scale: S, originX: OX, originY: OY } = cfg;
+    const SNAP = 50, MIN = 200;
+    const NS = 'http://www.w3.org/2000/svg';
+    const img = document.getElementById('img');
+    const svg = document.getElementById('svg');
+    const toPx = (x, y) => [OX + S * x, OY - S * y];
+    const toMm = (px, py) => [(px - OX) / S, (OY - py) / S];
+    const snap = v => Math.round(v / SNAP) * SNAP;
+    let z = cfg.zone.slice();
+    let W = 0, H = 0, rect, handles;
+
+    img.onerror = () => {
+      document.getElementById('editor').hidden = true;
+      const setup = document.getElementById('setup');
+      setup.hidden = false;
+      setup.firstElementChild.innerHTML = `<strong>Map image not found:</strong> <code>${cfg.image}</code>`;
+    };
+    img.onload = () => {
+      W = img.naturalWidth; H = img.naturalHeight;
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      build();
+      draw();
+    };
+    document.getElementById('editor').hidden = false;
+    img.src = cfg.image;
+
+    function el(tag, attrs) {
+      const e = document.createElementNS(NS, tag);
+      for (const k in attrs) e.setAttribute(k, attrs[k]);
+      svg.appendChild(e);
+      return e;
+    }
+
+    function build() {
+      const [minX] = toMm(0, 0), [maxX] = toMm(W, 0);
+      const [, maxY] = toMm(0, 0), [, minY] = toMm(0, H);
+      for (let m = Math.ceil(minX / 1000) * 1000; m <= maxX; m += 1000) {
+        const [gx] = toPx(m, 0);
+        el('line', { x1: gx, y1: 0, x2: gx, y2: H, class: 'grid' });
+      }
+      for (let m = Math.ceil(minY / 1000) * 1000; m <= maxY; m += 1000) {
+        const [, gy] = toPx(0, m);
+        el('line', { x1: 0, y1: gy, x2: W, y2: gy, class: 'grid' });
+      }
+      if (cfg.dock) {
+        const [dx, dy] = toPx(...cfg.dock);
+        el('circle', { cx: dx, cy: dy, r: 9, class: 'dock' });
+        el('text', { x: dx + 12, y: dy + 4, class: 'label' }).textContent = 'Dock';
+      }
+      rect = el('rect', { class: 'zone' });
+      // Corners in drawing order: 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left.
+      handles = [0, 1, 2, 3].map(i => el('circle', { r: 7, class: 'handle', 'data-i': i }));
+    }
+
+    function draw() {
+      const [x1, y1] = toPx(z[0], z[3]), [x2, y2] = toPx(z[2], z[1]);
+      rect.setAttribute('x', x1); rect.setAttribute('y', y1);
+      rect.setAttribute('width', x2 - x1); rect.setAttribute('height', y2 - y1);
+      [[x1, y1], [x2, y1], [x2, y2], [x1, y2]].forEach(([cx, cy], i) => {
+        handles[i].setAttribute('cx', cx); handles[i].setAttribute('cy', cy);
+      });
+      document.getElementById('coords').textContent = `[${z.join(', ')}]`;
+      document.getElementById('size').textContent =
+        `${((z[2] - z[0]) / 1000).toFixed(2)} m × ${((z[3] - z[1]) / 1000).toFixed(2)} m`;
+    }
+
+    function svgPoint(evt) {
+      const r = svg.getBoundingClientRect();
+      return [(evt.clientX - r.left) * W / r.width, (evt.clientY - r.top) * H / r.height];
+    }
+
+    let drag = null;
+    svg.addEventListener('pointerdown', e => {
+      const t = e.target;
+      if (t === rect) drag = { mode: 'move', start: toMm(...svgPoint(e)), orig: z.slice() };
+      else if (t.classList.contains('handle')) drag = { mode: 'corner', i: +t.dataset.i };
+      else return;
+      svg.setPointerCapture(e.pointerId);
+    });
+    svg.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const [mx, my] = toMm(...svgPoint(e));
+      if (drag.mode === 'move') {
+        const dx = snap(mx - drag.start[0]), dy = snap(my - drag.start[1]);
+        z = [drag.orig[0] + dx, drag.orig[1] + dy, drag.orig[2] + dx, drag.orig[3] + dy];
+      } else {
+        const sx = snap(mx), sy = snap(my), i = drag.i;
+        if (i === 0 || i === 3) z[0] = Math.min(sx, z[2] - MIN); else z[2] = Math.max(sx, z[0] + MIN);
+        if (i === 0 || i === 1) z[3] = Math.max(sy, z[1] + MIN); else z[1] = Math.min(sy, z[3] - MIN);
+      }
+      draw();
+    });
+    const end = () => { drag = null; };
+    svg.addEventListener('pointerup', end);
+    svg.addEventListener('pointercancel', end);
+
+    const copyBtn = document.getElementById('copy');
+    copyBtn.onclick = async () => {
+      const txt = `[${z.join(', ')}]`;
+      try { await navigator.clipboard.writeText(txt); copyBtn.textContent = 'Copied'; }
+      catch { prompt('Copy this:', txt); }
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    };
+    document.getElementById('reset').onclick = () => { z = cfg.zone.slice(); draw(); };
+  }
+</script>
+</body>
+</html>

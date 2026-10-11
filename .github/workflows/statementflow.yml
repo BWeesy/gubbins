@@ -30,9 +30,16 @@ jobs:
         run: |
           # Private-by-definition paths: real (non-example) config, learned
           # rules, the DB, uploads, retained raw statements.
+          #
+          # Pathspecs here use git's default matching, NOT gitignore's: `**`
+          # is just two `*`s, and a single `*` already crosses `/`. So
+          # 'statementflow/*.csv' matches at every depth, while the
+          # 'statementflow/**/*.csv' form needs a subdirectory and silently
+          # missed files sitting directly in statementflow/.
           private=$(git ls-files -- \
             'statementflow/config/*.yaml' \
-            'statementflow/**/rules.learned.yaml' \
+            'statementflow/rules.learned.yaml' \
+            'statementflow/*/rules.learned.yaml' \
             'statementflow/data/**' \
             'statementflow/uploads/**' \
             'statementflow/raw/**' \
@@ -42,9 +49,9 @@ jobs:
           # exemption is a filename pattern, not the whole fixtures directory:
           # a real export dropped in there must still fail this gate.
           statements=$(git ls-files -- \
-            'statementflow/**/*.csv' 'statementflow/**/*.ofx' \
-            'statementflow/**/*.qif' 'statementflow/**/*.xls' \
-            'statementflow/**/*.xlsx' 'statementflow/**/*.pdf' \
+            'statementflow/*.csv' 'statementflow/*.ofx' \
+            'statementflow/*.qif' 'statementflow/*.xls' \
+            'statementflow/*.xlsx' 'statementflow/*.pdf' \
             | grep -vE '^statementflow/tests/fixtures/[a-z0-9_]+_synthetic\.csv$' || true)
           if [ -n "${private}${statements}" ]; then
             echo "::error::Private/financial data must not be committed to this public repo:"

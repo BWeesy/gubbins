@@ -1,0 +1,38 @@
+name: house-pig
+
+on:
+  push:
+    paths:
+      - 'house-pig/**'
+      - '.gitignore'
+      - '.github/workflows/house-pig.yml'
+  pull_request:
+    paths:
+      - 'house-pig/**'
+      - '.gitignore'
+      - '.github/workflows/house-pig.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # gubbins is a PUBLIC repo and the vacuum map is a floor plan of the house.
+  # This fails the build if the map or the local settings are ever tracked,
+  # independently of .gitignore (a forced add would otherwise slip through).
+  no-private-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: No map or local settings are tracked
+        run: |
+          private=$(git ls-files -- \
+            'house-pig/*.local.js' \
+            'house-pig/*.png' 'house-pig/*.jpg' \
+            'house-pig/*.jpeg' 'house-pig/*.webp' || true)
+          if [ -n "${private}" ]; then
+            echo "::error::The house map and local settings must not be committed to this public repo:"
+            printf '%s\n' "${private}"
+            exit 1
+          fi
+          echo "OK: no map or local settings are tracked."
