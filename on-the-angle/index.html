@@ -1628,7 +1628,13 @@ function update(){
   }
 
   if(el('oBillboard').checked) drawBillboard({ metric: useFace?'Goal face':'Ground line', pct: headPct,
-    nearGap, farGap, facePoly:(useFace&&kPoly)?kPoly:null, spans,
+    nearGap, farGap, facePoly:(useFace&&kPoly)?kPoly:null,
+    // Both span lists are ground-line measures and must not reach the panel
+    // in face mode. The keeper used to be the only body, so a null face
+    // polygon arrived with an empty span and the fallback could not fire; a
+    // defender's span is not empty just because the keeper's is, and the
+    // panel was drawing it full height as though it were the keeper's.
+    spans:useFace?null:spans,
     defQuads:(useFace&&defDec)?defDec.cov:null, defSpans:useFace?null:defSpans,
     // only when the field was actually rebuilt this pass, or the panel would
     // show a stale one with the overlay switched off
