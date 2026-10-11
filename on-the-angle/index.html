@@ -10,6 +10,9 @@
     --ink:#e9f0f5; --muted:#8ea6b6; --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --cyan:#37d6c6; --cyanDim:#1c6f68; --green:#5be08a; --red:#ff6b6b; --amber:#ffcf5c;
+    /* Net a defender covers: the covered hue, darker. Same meaning, different
+       body -- and lightness is the one channel every dichromacy keeps. */
+    --defc:#2f9e63;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden}
@@ -78,6 +81,7 @@
   #hudGoal{display:block;width:calc(var(--u)*300);height:calc(var(--u)*175);margin:auto auto 0}
   #hudOpen{fill:var(--red)}
   #hudCovered{fill:var(--green)}
+  #hudCoveredDef{fill:var(--defc)}
 
   h1{font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin:0 0 2px;color:var(--ink)}
   .sub{font-size:11px;color:var(--muted);margin:0 0 10px}
@@ -108,6 +112,12 @@
   .chart{width:100%;height:auto;display:block;background:rgba(0,0,0,.22);border:1px solid var(--edge);border-radius:6px}
   .chk{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:12px;cursor:pointer;user-select:none}
   .chk input{accent-color:var(--cyan);width:15px;height:15px}
+  /* Defender picker: one chip per body on the pitch, so a squad of four costs
+     one row rather than four stacks of sliders. Only the selected chip gets
+     the sliders below it. */
+  .chips{display:flex;flex-wrap:wrap;gap:4px;margin:2px 0 8px}
+  .chips button{flex:0 0 auto;padding:5px 9px;font-family:var(--mono);font-size:11px}
+  .chips button.add{color:var(--cyan);font-family:var(--sans)}
 
   .stat{display:flex;justify-content:space-between;align-items:baseline;margin:6px 0;font-size:12px}
   .stat .k{color:var(--muted)}
@@ -161,7 +171,11 @@
     </defs>
     <rect x="0" y="0" width="366" height="214" id="hudOpen"/>
     <rect x="0" y="0" width="366" height="214" fill="url(#hudHatch)"/>
-    <polygon id="hudCovered" points=""/>
+    <!-- Groups, not one polygon each: with defenders on there is more than
+         one body shading the mouth, and the keeper and the outfielders are
+         drawn apart so you can see which of them is doing it. -->
+    <g id="hudCovered"></g>
+    <g id="hudCoveredDef"></g>
     <g id="hudField" opacity="0"></g>
     <rect x="0" y="0" width="366" height="214" fill="none" stroke="#dfeef2" stroke-width="4"/>
   </svg>
@@ -199,6 +213,7 @@
       <button data-s="tight">Tight</button>
       <button data-s="stroke">Stroke</button>
       <button data-s="oneVone">1v1</button>
+      <button data-s="corner">Short corner</button>
     </div>
   </div>
 
@@ -240,6 +255,41 @@
     <input class="slider" id="kw" type="range" min="0.4" max="1.6" step="0.05" value="0.9">
     <div class="row"><label>Max off line</label><span class="val" id="offMaxVal"></span></div>
     <input class="slider" id="offMax" type="range" min="1" max="14" step="0.1" value="6.4">
+  </div>
+
+  <div class="group">
+    <div class="glabel">Defenders</div>
+    <button id="defBtn" style="width:100%" aria-pressed="false">Defenders: off</button>
+    <div id="defCtl" style="display:none">
+      <p class="sub" style="margin:8px 0 6px">Outfield bodies anywhere in the D. They block from where they stand — no reaction, no dive.</p>
+      <div class="seg wrap" id="defSetSeg" style="margin-bottom:8px">
+        <button data-d="posts">Both posts</button>
+        <button data-d="back">Back post</button>
+        <button data-d="corner">Corner set</button>
+        <button data-d="clear">Clear</button>
+      </div>
+      <div class="chips" id="defChips"></div>
+      <p class="sub" id="defNone" style="margin:0 0 8px;display:none">None out there yet — add one, or take a set above.</p>
+      <div id="defEdit">
+        <div class="seg" id="defRoleSeg" style="margin-bottom:9px">
+          <button data-r="post">Post</button>
+          <button data-r="runner">Runner</button>
+        </div>
+        <div class="row"><label>Block chance</label><span class="val" id="dbkVal"></span></div>
+        <input class="slider" id="dbk" type="range" min="0.1" max="1" step="0.05" value="0.85">
+        <p class="sub" style="margin:-4px 0 8px">Odds this body stops what reaches it. Shows in the weighted picture, under Reach model.</p>
+        <button id="defPlaceBtn" style="width:100%;margin-bottom:8px">Place defender: off</button>
+        <div class="row"><label>Across &nbsp;<span style="color:var(--muted)">x</span></label><span class="val" id="dxVal"></span></div>
+        <input class="slider" id="dx" type="range" min="-16" max="16" step="0.05" value="0">
+        <div class="row"><label>Depth &nbsp;<span style="color:var(--muted)">z</span></label><span class="val" id="dzVal"></span></div>
+        <input class="slider" id="dz" type="range" min="0" max="15" step="0.05" value="0.3">
+        <button id="defDel" style="width:100%;margin-bottom:9px">Remove this one</button>
+      </div>
+      <div class="row"><label>Stance width</label><span class="val" id="dwVal"></span></div>
+      <input class="slider" id="dw" type="range" min="0.25" max="0.9" step="0.01" value="0.45">
+      <div class="row"><label>Height</label><span class="val" id="dhVal"></span></div>
+      <input class="slider" id="dh" type="range" min="1.4" max="2" step="0.01" value="1.78">
+    </div>
   </div>
 
   <div class="group">
@@ -322,6 +372,7 @@
     <div class="stat"><span class="k">Goal angle at ball</span><span class="v" id="rGoal">–</span></div>
     <div class="stat"><span class="k">Off centre line</span><span class="v" id="rBias">–</span></div>
     <div class="stat"><span class="k">Ball → keeper</span><span class="v" id="rDist">–</span></div>
+    <div class="stat" id="rDefRow" style="display:none"><span class="k">Defenders add</span><span class="v" id="rDef">–</span></div>
   </div>
   <div class="cvNote" id="cvNote"></div>
 </div>
@@ -389,15 +440,23 @@ const GOAL_W = 3.66, GOAL_H = 2.14, POST = 0.051, GOAL_DEPTH = 1.20, BACKBOARD_H
 /*  hatched as well as coloured, so it reads without any colour at all; */
 /*  and the safe palette swaps the pair for blue against orange, which  */
 /*  survives all three dichromacies.                                   */
+/*                                                                     */
+/*  Defenders put a third thing on the mouth and there is no third hue  */
+/*  left: red against green is spoken for in one palette, blue against  */
+/*  orange in the other. Net a defender covers is still covered, so it  */
+/*  keeps the covered hue and takes a darker shade of it -- about 24 L* */
+/*  apart, which is a gap lightness keeps where hue does not.           */
 /* ------------------------------------------------------------------ */
 const PALETTES={
   classic:{ label:'Classic',
     covered:0x5be08a, open:0xff6b6b, coveredCss:'#5be08a', openCss:'#ff6b6b',
     coveredFill:'#5be08a', openFill:'rgba(255,107,107,0.85)',
+    defCovered:0x2f9e63, defCoveredCss:'#2f9e63',
     heat:[[0.86,0.25,0.25],[0.95,0.80,0.30],[0.36,0.85,0.45]] },
   safe:{ label:'Colour-blind safe',
     covered:0x4da3ff, open:0xffa62b, coveredCss:'#4da3ff', openCss:'#ffa62b',
     coveredFill:'#4da3ff', openFill:'rgba(255,166,43,0.90)',
+    defCovered:0x1f5fae, defCoveredCss:'#1f5fae',
     // sequential ramp for the heatmap: dark blue -> teal -> yellow, which
     // stays monotonic in lightness under every dichromacy.
     heat:[[0.19,0.13,0.42],[0.13,0.57,0.55],[0.99,0.91,0.22]] }
@@ -677,6 +736,111 @@ function clipHP(poly,f){                                // Sutherland-Hodgman ha
   return out;
 }
 function polyArea(p){ let s=0; for(let i=0;i<p.length;i++){ const a=p[i], b=p[(i+1)%p.length]; s+=a[0]*b[1]-b[0]*a[1]; } return Math.abs(s)/2; }
+
+/* ---- more than one body in the way --------------------------------------
+   A keeper alone is one polygon: polyArea is exact and one hole in the open
+   net is all earcut has to cut. Put defenders out there and the covered
+   region becomes a union of overlapping polygons, which polyArea cannot give
+   -- and overlapping holes are the case ShapeGeometry triangulates wrongly.
+
+   So when more than one body is blocking, the mouth is sliced into 1 cm
+   horizontal strips and each strip is resolved by merging spans. Inside a
+   strip the answer is a set of rectangles: exact to draw, with an area
+   correct to the strip height. Nothing routes through here while the keeper
+   is alone, so the page as it stands does not move by a fraction of a
+   percent. */
+const STRIPS=214;                                  // 1 cm across a 2.14 m mouth
+const HEAT_STRIPS=48;                              // coarser: one heatmap is ~1000 of these
+function scanSpans(poly,y,out){
+  const xs=[];
+  for(let i=0;i<poly.length;i++){
+    const a=poly[i], b=poly[(i+1)%poly.length];
+    if((a[1]<=y)===(b[1]<=y)) continue;            // horizontal edges contribute nothing
+    xs.push(a[0]+(y-a[1])/(b[1]-a[1])*(b[0]-a[0]));
+  }
+  xs.sort((p,q)=>p-q);
+  for(let i=0;i+1<xs.length;i+=2) out.push([xs[i],xs[i+1]]);
+}
+/* Merge overlapping spans and clip them to the goal mouth in the one pass.
+   Sorts its argument, so hand it a list you are finished with. */
+function mergeSpans(spans){
+  const out=[];
+  spans.sort((a,b)=>a[0]-b[0]);
+  let s=null,e=0;
+  for(const v of spans){
+    const a=Math.max(-HALF,v[0]), b=Math.min(HALF,v[1]);
+    if(b<=a) continue;
+    if(s===null){ s=a; e=b; }
+    else if(a>e){ out.push([s,e]); s=a; e=b; }
+    else if(b>e) e=b;
+  }
+  if(s!==null) out.push([s,e]);
+  return out;
+}
+function sameSpans(a,b){
+  if(a.length!==b.length) return false;
+  for(let i=0;i<a.length;i++)
+    if(Math.abs(a[i][0]-b[i][0])>1e-9||Math.abs(a[i][1]-b[i][1])>1e-9) return false;
+  return true;
+}
+/* Covered and open rectangles over the goal mouth, and the covered area.
+
+   Rows that came out the same as the one below are grown rather than stacked.
+   A vertical edge stays vertical through this projection -- the ball is a
+   point, both planes are upright, so a vertical line maps to a vertical line
+   -- which means the projected silhouettes are staircases and long runs of
+   strips share their spans exactly. Merging them takes a four-body mouth from
+   a thousand rectangles to a few dozen, and draws precisely the same shape. */
+function stripDecomp(polys,n){
+  const dy=GOAL_H/n, cov=[], open=[];
+  let area=0, prev=null, prevCov=0, prevOpen=0;
+  for(let i=0;i<n;i++){
+    const y0=i*dy, y1=y0+dy, spans=[];
+    for(const p of polys) if(p&&p.length>=3) scanSpans(p,y0+dy/2,spans);
+    const m=mergeSpans(spans);
+    for(const s of m) area+=(s[1]-s[0])*dy;
+    if(prev && sameSpans(prev,m)){
+      for(let j=cov.length-prevCov;j<cov.length;j++) cov[j][3]=y1;
+      for(let j=open.length-prevOpen;j<open.length;j++) open[j][3]=y1;
+      continue;
+    }
+    let x=-HALF, nc=0, no=0;
+    for(const s of m){
+      if(s[0]>x){ open.push([x,y0,s[0],y1]); no++; }
+      cov.push([s[0],y0,s[1],y1]); nc++;
+      x=s[1];
+    }
+    if(x<HALF){ open.push([x,y0,HALF,y1]); no++; }
+    prev=m; prevCov=nc; prevOpen=no;
+  }
+  return {cov,open,area};
+}
+/* One geometry for a pile of goal-mouth rectangles. UVs come from the metres
+   each corner sits at, so a hatch tiles across the whole set rather than
+   restarting inside every strip. */
+function quadMesh(quads,z,color,op,hatched){
+  if(!quads.length) return null;
+  const pos=[],uv=[];
+  for(const q of quads){
+    const v=[[q[0],q[1]],[q[2],q[1]],[q[2],q[3]],[q[0],q[1]],[q[2],q[3]],[q[0],q[3]]];
+    for(const p of v){ pos.push(p[0],p[1],z); uv.push(p[0]*2.6,p[1]*2.6); }
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(pos),3));
+  g.setAttribute('uv',new THREE.BufferAttribute(new Float32Array(uv),2));
+  const m={color,transparent:true,opacity:op,side:THREE.DoubleSide,depthWrite:false};
+  if(hatched) m.map=hatchTex;
+  return new THREE.Mesh(g,new THREE.MeshBasicMaterial(m));
+}
+/* Whether a defender already owns a point on the goal face. */
+function pointInPoly(poly,x,y){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const a=poly[i], b=poly[j];
+    if((a[1]>y)!==(b[1]>y) && x < a[0]+(y-a[1])/(b[1]-a[1])*(b[0]-a[0])) inside=!inside;
+  }
+  return inside;
+}
 // keeper silhouette (local polygon of [s,y]) projected onto the goal opening; clipped to the mouth
 function faceCoverage(B,K,poly2d){
   const dir=B.clone().sub(K).normalize();
@@ -828,7 +992,15 @@ const PART={
   // same failure as the old teal keeper. Nothing clears both the light pitch and
   // the dark sky, so it takes the one that clears both backgrounds (3.7 and 17)
   // and accepts reading close to the pads, which its shape distinguishes anyway.
-  stick: {colour:0xeef2f5, save:0.35}
+  stick: {colour:0xeef2f5, save:0.35},
+  // Outfield kit, shared by every defender. Slate was the obvious choice and
+  // it fails the same test the teal keeper failed: contrast 1.5 on the
+  // rendered pitch. Light violet clears the pitch (3.6) and the sky (8.8)
+  // and, unlike another pale neutral, never reads as a second keeper standing
+  // behind the first.
+  dLeg:  {colour:0x9b86d4, save:1.00},
+  dBody: {colour:0xb9a7e8, save:1.00},
+  dHead: {colour:0xcfc2f2, save:1.00}
 };
 const STICK_LEN=0.92;          // typical GK stick; the rules cap the ring and weight, not length
 const STICK_SIDE=1;            // keepers are right-handed; +1 is the stick side of the silhouette
@@ -886,6 +1058,90 @@ function silhouette(kw,kh,posture){
   return {poly:outlineFromParts(solid), parts,
           footMin:Math.min(...groundX), footMax:Math.max(...groundX)};
 }
+
+/* ---- outfield defenders -------------------------------------------------
+   A defender is not a spare keeper: no pads, no gloves, a narrower body, and
+   a stick that is the only thing reaching past it. Same parts machinery, own
+   kit, own two shapes.
+
+   Two roles, because the two jobs look nothing alike from the ball. A post
+   defender stands tall on the line with the stick straight down beside the
+   post; a runner charges out low with it stretched in front of them.
+
+   The legs are two parts with a real gap between them. The save field reads
+   that gap and the binary coverage polygon does not, because outlineFromParts
+   takes the envelope -- exactly as it already does across the keeper's legs.
+   Same known overstatement, same place, same reason. */
+const DEF={shoulderHW:0.1295, headHW:0.072, hipY:0.520, neckY:0.865,
+           legW:0.110, stickLen:0.95, stickThick:0.028};
+const DEF_RUN=0.84;            // height a charging defender presents, as a fraction
+const DEF_STICK_POST=-80;      // straight down the post
+const DEF_STICK_RUN=-40;       // out in front, reaching the ground
+function defenderSilhouette(dw,dh,role){
+  const H=dh, S=STICK_SIDE, legW=DEF.legW*H;
+  const torsoHW=DEF.shoulderHW*H, headHW=DEF.headHW*H;
+  let parts;
+  if(role==='runner'){
+    const stanceHW=Math.max(legW, dw/2)+0.09;              // mid-stride, driving out
+    const topY=DEF_RUN*H, neckY=topY-0.135*H, hipY=0.40*H;
+    parts=[
+      boxPart('dLeg', -stanceHW, -stanceHW+legW, 0, hipY),
+      boxPart('dLeg',  stanceHW-legW, stanceHW,  0, hipY),
+      boxPart('dBody',-torsoHW, torsoHW, hipY,  neckY),
+      boxPart('dHead',-headHW,  headHW,  neckY, topY),
+      stickPart([S*(torsoHW+0.08), 0.38*H],
+                S>0?DEF_STICK_RUN:180-DEF_STICK_RUN, DEF.stickLen, DEF.stickThick)
+    ];
+  } else {
+    const stanceHW=Math.max(legW, dw/2);
+    const hipY=DEF.hipY*H, neckY=DEF.neckY*H;
+    parts=[
+      boxPart('dLeg', -stanceHW, -stanceHW+legW, 0, hipY),
+      boxPart('dLeg',  stanceHW-legW, stanceHW,  0, hipY),
+      boxPart('dBody',-torsoHW, torsoHW, hipY,  neckY),
+      boxPart('dHead',-headHW,  headHW,  neckY, H),
+      stickPart([S*(torsoHW+0.10), hipY*1.02],
+                S>0?DEF_STICK_POST:180-DEF_STICK_POST, DEF.stickLen, DEF.stickThick)
+    ];
+  }
+  const solid=parts.filter(p=>p.save>=BLOCK_MIN);
+  const groundX=solid.flatMap(p=>p.poly.filter(q=>q[1]<=0.001).map(q=>q[0]));
+  return {poly:outlineFromParts(solid), parts,
+          footMin:Math.min(...groundX), footMax:Math.max(...groundX)};
+}
+
+/* Defenders are plain records; everything else about them is derived each
+   update. Position is clamped into the D on the way in, because that is the
+   only place one can legally stand. */
+let defendersOn=false, defenders=[], defSel=0;
+const DEF_MAX=6;
+/* Odds a body stops what reaches it, by role. The keeper's parts each carry
+   their own because a pad and a stick are different propositions; a defender
+   carries one for the whole body, but not the same one as the next defender:
+   a post man is planted, set and facing the shot, while a runner is arriving
+   at full tilt into a flick that is often already past them. The number is
+   seeded from the role and is then the user's, per body. */
+const DEF_BLOCK={post:0.85, runner:0.60};
+const blkOf=d=>Number.isFinite(d.blk)?d.blk:(DEF_BLOCK[d.role]||0.75);
+/* One figure if they all carry the same odds, the spread if they do not --
+   the note is a sentence, not a table. */
+function blkRange(ds){
+  const v=ds.map(d=>Math.round(d.blk*100));
+  const lo=Math.min(...v), hi=Math.max(...v);
+  return lo===hi ? lo+'%' : lo+'-'+hi+'%';
+}
+const defGroup=new THREE.Group(); scene.add(defGroup);
+/* Nearest legal spot in the circle. The D is every point within CIRCLE_R of
+   the line between the posts, so the answer comes from the distance to that
+   segment. The goal line itself is legal: it is where a post defender stands. */
+function clampToD(x,z){
+  if(!Number.isFinite(x)||!Number.isFinite(z)) return new THREE.Vector2(0,0.05);
+  z=Math.max(0,Math.min(CIRCLE_R,z));
+  const cx=Math.max(-HALF,Math.min(HALF,x)), dx=x-cx, d=Math.hypot(dx,z);
+  if(d<=CIRCLE_R) return new THREE.Vector2(x,z);
+  const k=CIRCLE_R/d;
+  return new THREE.Vector2(cx+dx*k, z*k);
+}
 /* One thin slab per part, each in its own colour, so the model shows what is
    actually doing the blocking. Materials are cached by colour: the parts are
    rebuilt whenever the silhouette changes, and a material per rebuild would
@@ -924,6 +1180,80 @@ function ensureKeeperMesh(parts){
   parts.forEach(p=>keeper.add(partMesh(p)));
   keeperSig=sig;
 }
+/* The same trick for the defenders, one Group each. Their positions change
+   every frame a slider moves and their shapes almost never do, so the meshes
+   are rebuilt off the shapes alone and merely re-placed the rest of the time. */
+/* ---- squad numbers -----------------------------------------------------
+   A number on the chest, so a body out on the pitch can be matched to its
+   chip in the panel without counting across the D.
+
+   Decoration, and kept out of the parts list on purpose: parts are what the
+   coverage maths measures, and a badge must not add a square centimetre to
+   what counts as blocked.
+
+   Glyphs are drawn once and cached by digit, the materials with them, and
+   both are flagged shared -- rebuilding the meshes must not take the textures
+   with it, which is the trap the hatch fell into. */
+const numTex=new Map(), numMats=new Map();
+function numberMaterial(n){
+  if(numMats.has(n)) return numMats.get(n);
+  const c=document.createElement('canvas'); c.width=c.height=64;
+  const g=c.getContext('2d');
+  g.font='bold 50px '+'-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif';
+  g.textAlign='center'; g.textBaseline='middle';
+  // Halo first, then the digit: a dark glyph alone disappears wherever the
+  // kit falls into shadow, and the shirt is light enough that a light glyph
+  // alone would do the same in full light.
+  g.lineWidth=7; g.strokeStyle='rgba(255,255,255,0.9)'; g.strokeText(n,32,34);
+  g.fillStyle='#1b2233'; g.fillText(n,32,34);
+  const t=new THREE.CanvasTexture(c); t.magFilter=THREE.LinearFilter;
+  numTex.set(n,t); SHARED_TEX.add(t);
+  const m=new THREE.MeshBasicMaterial({map:t, transparent:true, depthWrite:false});
+  numMats.set(n,m); return m;
+}
+/* The chest is wherever the body part actually is, which is not the same
+   height in the two roles, so it is read off the silhouette rather than
+   written out twice.
+
+   One badge per face. The slab's local -z is the side the ball is on (see
+   faceAngle), so that one is turned to look back down the shot; the +z twin
+   is there so the number still reads from the Behind goal view rather than
+   coming out mirrored. */
+const BADGE_Z=0.086;                               // just proud of the 0.16 m slab
+function chestBadges(sil,n){
+  const body=sil.parts.find(p=>p.kind==='dBody'); if(!body) return [];
+  const xs=body.poly.map(q=>q[0]), ys=body.poly.map(q=>q[1]);
+  const w=Math.max(...xs)-Math.min(...xs), h=Math.max(...ys)-Math.min(...ys);
+  const s=Math.min(0.24, h*0.8, w*0.8);
+  const y=(Math.min(...ys)+Math.max(...ys))/2;
+  const geo=()=>new THREE.PlaneGeometry(s,s);
+  const front=new THREE.Mesh(geo(), numberMaterial(n));
+  front.position.set(0,y,-BADGE_Z); front.rotation.y=Math.PI;
+  const back=new THREE.Mesh(geo(), numberMaterial(n));
+  back.position.set(0,y,BADGE_Z);
+  return [front,back];
+}
+
+let defSig='';
+function ensureDefenderMeshes(sils){
+  const sig=JSON.stringify(sils.map(s=>s.parts.map(p=>[p.kind,p.poly])));
+  if(sig===defSig) return;
+  const keep=[...partMats.values(), ...numMats.values()];
+  for(let i=defGroup.children.length-1;i>=0;i--){
+    const g=defGroup.children[i];
+    disposeChildren(g,keep);
+    defGroup.remove(g);
+  }
+  // The badges go in flat rather than in a sub-group: disposeChildren only
+  // reaches a group's own children, so a nested one would leak its geometry.
+  sils.forEach((s,i)=>{
+    const g=new THREE.Group();
+    s.parts.forEach(p=>g.add(partMesh(p)));
+    chestBadges(s,i+1).forEach(b=>g.add(b));
+    defGroup.add(g);
+  });
+  defSig=sig;
+}
 
 /* ---- heatmap: coverage % from every shot spot inside the D ---- */
 function insideD(x,z){ if(z<0) return false; const d=(Math.abs(x)<=HALF)?z:Math.hypot(Math.abs(x)-HALF,z); return d<=CIRCLE_R; }
@@ -955,13 +1285,38 @@ function computeHeatmap(){
   // that is where the weighted figure is shown; weighting the sweep in
   // ground-line mode would contradict the panel beside it.
   const weighted = reachOn && coverageMode==='face';
+  // Defenders stay where they are put while the shot spot moves, which is the
+  // whole point of the picture: it shows where a shot still finds net past
+  // this particular set, not past a set that follows the ball around.
+  const dw=+el('dw').value, dh=+el('dh').value;
+  const dfs=defendersOn?defenders.map(d=>({P:clampToD(d.x,d.z), blk:blkOf(d),
+    sil:defenderSilhouette(dw,dh,d.role)})):[];
   const sbx=bxBall, sbz=bzBall, step=0.5, y=0.009, pos=[], col=[];
   for(let x=-16;x<16;x+=step) for(let z=0.4;z<16;z+=step){
     const cx=x+step/2, cz=z+step/2; if(!insideD(cx,cz)) continue;
     const S=new THREE.Vector2(cx,cz);
     let pct;
-    if(weighted){ pct=100*weightedCoverage(S,Kcur,sil.parts); }
-    else if(coverageMode==='face'){ bxBall=cx; bzBall=cz; const f=faceCoverage(S,Kcur,sil.poly); pct=f?f.pct:0; }
+    if(weighted){
+      bxBall=cx; bzBall=cz;                      // defShotsFrom projects from here
+      pct=100*weightedCoverage(S,Kcur,sil.parts,dfs.length?defShotsFrom(S,dfs):null);
+    }
+    else if(coverageMode==='face'){
+      bxBall=cx; bzBall=cz;
+      const f=faceCoverage(S,Kcur,sil.poly);
+      if(dfs.length){
+        const polys=[]; if(f&&f.poly.length>=3) polys.push(f.poly);
+        for(const g of defShotsFrom(S,dfs)) polys.push(g.poly);
+        pct=polys.length?stripDecomp(polys,HEAT_STRIPS).area/(GOAL_W*GOAL_H)*100:0;
+      } else pct=f?f.pct:0;
+    }
+    else if(dfs.length){
+      const sp=[], a=shadowSpan(S,Kcur,sil.footMin,sil.footMax);
+      if(a) sp.push([a[0],a[1]]);
+      for(const d of dfs){ const b=shadowSpan(S,d.P,d.sil.footMin,d.sil.footMax);
+        if(b) sp.push([b[0],b[1]]); }
+      let w=0; for(const s of mergeSpans(sp)) w+=s[1]-s[0];
+      pct=w/GOAL_W*100;
+    }
     else pct=groundPct(S,Kcur,sil);
     const c=heatColor(Math.max(0,Math.min(1,pct/100)));
     const q=[[x,z],[x+step,z],[x+step,z+step],[x,z],[x+step,z+step],[x,z+step]];
@@ -996,14 +1351,19 @@ function drawBillboard(d){
   // SVG viewBox is the goal mouth in centimetres, origin at the near post,
   // y down -- so the covered polygon maps straight across from metres.
   const mapx=X=>((X+HALF)*100).toFixed(1), mapy=Y=>((GOAL_H-Y)*100).toFixed(1);
-  let pts='';
-  if(d.facePoly && d.facePoly.length>=3){
-    pts=d.facePoly.map(p=>mapx(p[0])+','+mapy(p[1])).join(' ');
-  } else if(d.coveredW>0){
-    // Ground-line mode has no polygon, just a covered span: draw it full height.
-    pts=[[d.covL,0],[d.covR,0],[d.covR,GOAL_H],[d.covL,GOAL_H]].map(p=>mapx(p[0])+','+mapy(p[1])).join(' ');
-  }
-  el('hudCovered').setAttribute('points',pts);
+  // The keeper's share, then whatever the defenders add on top of it. In
+  // ground-line mode there is no polygon, only covered spans, so those are
+  // drawn full height. The defenders' share arrives as strip rectangles, and
+  // goes in as one <path> of many subpaths rather than a few hundred elements
+  // to lay out afresh every update.
+  const poly=p=>'<polygon points="'+p.map(q=>mapx(q[0])+','+mapy(q[1])).join(' ')+'"/>';
+  const bars=ss=>ss.map(s=>poly([[s[0],0],[s[1],0],[s[1],GOAL_H],[s[0],GOAL_H]])).join('');
+  const quads=qs=>'<path d="'+qs.map(q=>'M'+mapx(q[0])+' '+mapy(q[3])+'H'+mapx(q[2])+
+                                        'V'+mapy(q[1])+'H'+mapx(q[0])+'Z').join('')+'"/>';
+  el('hudCovered').innerHTML = (d.facePoly && d.facePoly.length>=3)
+    ? poly(d.facePoly) : bars(d.spans||[]);
+  el('hudCoveredDef').innerHTML = d.defQuads&&d.defQuads.length ? quads(d.defQuads)
+    : bars(d.defSpans||[]);
   drawHudField(fieldOn?d.field:null);
 }
 
@@ -1075,17 +1435,41 @@ function update(){
   const dir=B.clone().sub(K).normalize();
   const perp=new THREE.Vector2(-dir.y, dir.x);
 
-  // ---- shadow on goal line (from silhouette footprint) ----
+  // ---- defenders ----
+  // Silhouettes and clamped positions first, so everything below can treat
+  // the keeper and the outfielders as one list of bodies in the way.
+  const dw=+el('dw').value, dh=+el('dh').value;
+  const defs=defendersOn?defenders.map(d=>{
+    const P=clampToD(d.x,d.z);
+    return {P, role:d.role, blk:blkOf(d), sil:defenderSilhouette(dw,dh,d.role)};
+  }):[];
+
+  // ---- shadow on goal line (from silhouette footprints) ----
+  // One span per body, merged. With defenders out there the covered width is
+  // a set of intervals rather than one, and two bodies standing in line must
+  // not have their overlap counted twice.
   const Efa=K.clone().add(perp.clone().multiplyScalar(sil.footMax));
   const Efb=K.clone().add(perp.clone().multiplyScalar(sil.footMin));
   let xa=projToLine(B,Efa), xb=projToLine(B,Efb);
+  const kSpan=(xa!==null&&xb!==null)?[Math.min(xa,xb),Math.max(xa,xb)]:null;
+  const rawSpans=[], rawDefSpans=[];
+  if(kSpan) rawSpans.push([kSpan[0],kSpan[1]]);
+  for(const d of defs){
+    const s=shadowSpan(B,d.P,d.sil.footMin,d.sil.footMax);
+    if(s){ rawSpans.push([s[0],s[1]]); rawDefSpans.push([s[0],s[1]]); }
+  }
+  const spans=mergeSpans(rawSpans);
+  const defSpans=mergeSpans(rawDefSpans);
+  // What the keeper alone is worth, kept aside so the panel can say what the
+  // bodies in front of them added.
+  const kCoveredW=kSpan?Math.max(0,Math.min(HALF,kSpan[1])-Math.max(-HALF,kSpan[0])):0;
   let coveredW=0, covL=0, covR=0, leftGap=GOAL_W, rightGap=0;
-  if(xa!==null && xb!==null){
-    const sMin=Math.min(xa,xb), sMax=Math.max(xa,xb);
-    covL=Math.max(-HALF,sMin); covR=Math.min(HALF,sMax);
-    coveredW=Math.max(0,covR-covL);
-    if(coveredW>0){ leftGap=Math.max(0,covL-(-HALF)); rightGap=Math.max(0,HALF-covR); }
-    else { leftGap=GOAL_W; rightGap=0; }
+  for(const s of spans) coveredW+=s[1]-s[0];
+  if(coveredW>0){
+    // The gaps stay what they have always been: open net at each post. An
+    // interior hole between two bodies is neither, and shows on the picture.
+    covL=spans[0][0]; covR=spans[spans.length-1][1];
+    leftGap=Math.max(0,covL+HALF); rightGap=Math.max(0,HALF-covR);
   }
 
   const goalDeg=angBetween(pL.clone().sub(B), pR.clone().sub(B))*180/Math.PI;
@@ -1106,13 +1490,56 @@ function update(){
   ensureKeeperMesh(sil.parts);
   keeper.position.set(K.x, 0, K.y);
   keeper.rotation.y=faceAngle(dir);
+  // Defenders face the ball the same way the keeper does: the silhouette is a
+  // flat slab and only means anything edge-on to the shot.
+  ensureDefenderMeshes(defs.map(d=>d.sil));
+  defGroup.visible=defs.length>0;
+  defs.forEach((d,i)=>{
+    const g=defGroup.children[i]; if(!g) return;
+    g.position.set(d.P.x, 0, d.P.y);
+    g.rotation.y=faceAngle(B.clone().sub(d.P).normalize());
+  });
   bxBall=bx; bzBall=bz;                                     // for goal-face projection
 
   // goal-face (2D) coverage
   const face=faceCoverage(B,K,sil.poly);
   const facePct=face?face.pct:0;
+  const kPoly=(face&&face.poly.length>=3)?face.poly:null;
+  // Each defender's own share of the face, and the union of everything. With
+  // nobody but the keeper out there this stays on the exact-polygon path.
+  // Each shape kept beside the odds of the body that casts it, since the two
+  // pictures want different halves: the geometry takes the polygons, the save
+  // field needs to know whose each one is.
+  const defShots=defShotsFrom(B,defs);
+  const defFaces=defShots.map(s=>s.poly);
+  const multi=defFaces.length>0;
+  const allDec=multi?stripDecomp(kPoly?[kPoly,...defFaces]:defFaces,STRIPS):null;
+  const defDec=multi?stripDecomp(defFaces,STRIPS):null;
+  const faceAll=multi?allDec.area/(GOAL_W*GOAL_H)*100:facePct;
   const useFace=(coverageMode==='face');
-  const headPct=useFace?facePct:covPct;
+  const headPct=useFace?faceAll:covPct;
+  /* What the bodies in front of the keeper are worth, in percentage points of
+     whichever metric the headline is actually showing.
+
+     The geometric delta is the wrong answer once the weighted picture is up,
+     and wrong by a lot: a body blocks its whole shadow in the shadow figure
+     whatever its odds, so a defender at 60% was reading +48 beside a weighted
+     headline it had moved by 23. Two numbers in different units, side by
+     side, inviting you to subtract them.
+
+     Measured again against the weighted figure when that is what is on
+     screen. Both halves are taken at the sweep's resolution rather than the
+     drawn field's, so the difference between them is self-consistent -- but
+     it will not reconcile exactly with the headline, which is drawn finer.
+     Subtracting one from the other lands within about 3 points. Closing that
+     would mean sampling the whole mouth a second time at the fine step on
+     every update, which is a lot of frame time for a secondary readout. */
+  const weightedHead = reachOn && useFace && el('oCover').checked && multi;
+  const addPct = weightedHead
+    ? Math.max(0,(weightedCoverage(B,K,sil.parts,defShots)
+                 -weightedCoverage(B,K,sil.parts,null))*100)
+    : useFace ? Math.max(0,faceAll-facePct)
+              : Math.max(0,covPct-kCoveredW/GOAL_W*100);
 
 
   /* ---- rebuild overlays ---- */
@@ -1132,25 +1559,41 @@ function update(){
       if(reachOn){
         // With the reach model on, the binary block gives way to the shaded
         // field: one picture at a time, so a colour never means two things.
-        const f=buildSaveField(B,K,sil.parts);
+        const f=buildSaveField(B,K,sil.parts,defShots);
         if(f) viz.add(f);
+      } else if(multi){
+        // Several bodies: open net and the defenders' share both come out of
+        // the strip decomposition, so two bodies overlapping neither shade
+        // twice as hard nor need holing out of one another.
+        const om=quadMesh(allDec.open, 0.0, PAL().open, 0.30, true); if(om) viz.add(om);
+        if(kPoly) viz.add(faceMesh(kPoly, 0.04, PAL().covered, 0.5));
+        const dm=quadMesh(defDec.cov, 0.055, PAL().defCovered, 0.72); if(dm) viz.add(dm);
       } else {
         // Open net carries the colour and the hatch, with the covered region cut
         // out of it, so the two never share a pattern. Covered goes on top, flat.
-        viz.add(openFaceMesh(face&&face.poly.length>=3?face.poly:null, 0.0, PAL().open, 0.30));
-        if(face && face.poly.length>=3) viz.add(faceMesh(face.poly, 0.05, PAL().covered, 0.5));
+        viz.add(openFaceMesh(kPoly, 0.0, PAL().open, 0.30));
+        if(kPoly) viz.add(faceMesh(kPoly, 0.05, PAL().covered, 0.5));
       }
       viz.add(polyline([new THREE.Vector3(-HALF,0,0),new THREE.Vector3(HALF,0,0),
         new THREE.Vector3(HALF,GOAL_H,0),new THREE.Vector3(-HALF,GOAL_H,0),new THREE.Vector3(-HALF,0,0)],0xdfeef2));
-    } else if(xa!==null){
-      // shadow slice ball -> keeper edges -> goal line
-      viz.add(tri(v3(B,0.015), new THREE.Vector3(xa,0.015,0), new THREE.Vector3(xb,0.015,0), 0x33424c, 0.28));
-      viz.add(polyline([v3(B,yb),new THREE.Vector3(xa,yb,0)],0x9fb3bd));
-      viz.add(polyline([v3(B,yb),new THREE.Vector3(xb,yb,0)],0x9fb3bd));
-      // goalmouth: covered solid, open gaps hatched
-      if(leftGap>0)  viz.add(seg(-HALF, coveredW>0?covL:HALF, PAL().open, undefined, true));
-      if(coveredW>0) viz.add(seg(covL, covR, PAL().covered));
-      if(rightGap>0) viz.add(seg(covR, HALF, PAL().open, undefined, true));
+    } else if(xa!==null || spans.length){
+      if(xa!==null){
+        // shadow slice ball -> keeper edges -> goal line
+        viz.add(tri(v3(B,0.015), new THREE.Vector3(xa,0.015,0), new THREE.Vector3(xb,0.015,0), 0x33424c, 0.28));
+        viz.add(polyline([v3(B,yb),new THREE.Vector3(xa,yb,0)],0x9fb3bd));
+        viz.add(polyline([v3(B,yb),new THREE.Vector3(xb,yb,0)],0x9fb3bd));
+      }
+      // goalmouth: covered solid, open hatched -- walking the merged spans, so
+      // a hole between two bodies is hatched like the ones at the posts.
+      let gx=-HALF;
+      for(const s of spans){
+        if(s[0]>gx) viz.add(seg(gx, s[0], PAL().open, undefined, true));
+        viz.add(seg(s[0], s[1], PAL().covered));
+        gx=s[1];
+      }
+      if(gx<HALF) viz.add(seg(gx, HALF, PAL().open, undefined, true));
+      // Whose is whose: the defenders' share as a second bar above the first.
+      for(const s of defSpans) viz.add(seg(s[0], s[1], PAL().defCovered, 0.20));
     }
   }
   if(el('oPyr').checked){
@@ -1176,9 +1619,26 @@ function update(){
   el('rCov').textContent=headPct.toFixed(0)+'%';
   el('rBar').style.width=Math.max(0,Math.min(100,headPct))+'%';
   el('khVal').textContent=kh.toFixed(2)+' m';
-  el('cvNote').innerHTML = useFace
+  el('dwVal').textContent=dw.toFixed(2)+' m';
+  el('dhVal').textContent=dh.toFixed(2)+' m';
+
+  // The clamp keeps a defender in the D even when the slider has been dragged
+  // past it, so the readout is the position that is actually being modelled.
+  { const sd=defenders[defSel];
+    el('dxVal').textContent=sd?sd.x.toFixed(2)+' m':'–';
+    el('dzVal').textContent=sd?sd.z.toFixed(2)+' m':'–';
+    el('dbkVal').textContent=sd?Math.round(blkOf(sd)*100)+'%':'–'; }
+  el('rDefRow').style.display=defs.length?'':'none';
+  el('rDef').textContent=defs.length?('+'+addPct.toFixed(0)+' pts'):'–';
+  el('cvNote').innerHTML = (useFace
     ? '% of the whole goal <b>face</b> (3.66 × 2.14 m) covered — keeper modelled as a wall '+kh.toFixed(2)+' m tall. Includes lifted shots.'
-    : '% of goal <b>width</b> covered against a flat shot along the ground — height isn\'t counted.';
+    : '% of goal <b>width</b> covered against a flat shot along the ground — height isn\'t counted.')
+    // Which sentence depends on which picture is up: with the reach model on
+    // the two greens are gone and the shading is the weighted field, where
+    // the block chance is the thing actually doing the work.
+    + (defs.length?(reachOn&&useFace
+        ? ' Defenders turn '+blkRange(defs)+' of what reaches them; the rest carries the keeper\'s weighting.'
+        : ' Darker shading is net a defender stands in the way of, not the keeper.'):'');
   el('rNear').textContent=(nearGap*100).toFixed(0)+' cm';
   el('rFar').textContent=(farGap*100).toFixed(0)+' cm';
   el('rBias').textContent=Math.abs(biasDeg)<0.3?'on line'
@@ -1196,7 +1656,14 @@ function update(){
   }
 
   if(el('oBillboard').checked) drawBillboard({ metric: useFace?'Goal face':'Ground line', pct: headPct,
-    nearGap, farGap, facePoly:(useFace&&face)?face.poly:null, covL, covR, coveredW,
+    nearGap, farGap, facePoly:(useFace&&kPoly)?kPoly:null,
+    // Both span lists are ground-line measures and must not reach the panel
+    // in face mode. The keeper used to be the only body, so a null face
+    // polygon arrived with an empty span and the fallback could not fire; a
+    // defender's span is not empty just because the keeper's is, and the
+    // panel was drawing it full height as though it were the keeper's.
+    spans:useFace?null:spans,
+    defQuads:(useFace&&defDec)?defDec.cov:null, defSpans:useFace?null:defSpans,
     // only when the field was actually rebuilt this pass, or the panel would
     // show a stale one with the overlay switched off
     field:(reachOn&&useFace&&el('oCover').checked)?lastField:null });
@@ -1301,6 +1768,19 @@ function tryPlace(e){
     const cx=Math.max(-14,Math.min(14,hit.x));
     if(placeMode==='ball'){ el('bx').value=cx.toFixed(1); el('bz').value=Math.max(0.6,Math.min(20,hit.z)).toFixed(1); }
     else if(placeMode==='keeper'){ if(keeperMode!=='free') setMode('free'); el('kx').value=Math.max(-8,Math.min(8,hit.x)).toFixed(2); el('kz').value=Math.max(0.2,Math.min(12,hit.z)).toFixed(2); }
+    else if(placeMode==='defender'){
+      // Moves the selected defender rather than adding one, so a stray click
+      // on the pitch cannot quietly put an extra body in the D.
+      const d=defenders[defSel];
+      if(d){
+        const P=clampToD(hit.x,hit.z);
+        el('dx').value=P.x.toFixed(2); el('dz').value=P.y.toFixed(2);
+        // Read it back off the sliders, which have snapped it to their own
+        // step, so the handle, the readout and the body on the pitch agree.
+        const Q=clampToD(+el('dx').value, +el('dz').value);
+        d.x=Q.x; d.z=Q.y;
+      }
+    }
     update();
   }
 }
@@ -1342,6 +1822,8 @@ function setPlace(mode){
   el('placeBtn').textContent='Place ball: '+(placeMode==='ball'?'on':'off');
   el('keeperPlaceBtn').classList.toggle('on',placeMode==='keeper');
   el('keeperPlaceBtn').textContent='Place keeper: '+(placeMode==='keeper'?'on':'off');
+  el('defPlaceBtn').classList.toggle('on',placeMode==='defender');
+  el('defPlaceBtn').textContent='Place defender: '+(placeMode==='defender'?'on':'off');
 }
 el('placeBtn').addEventListener('click',()=>setPlace('ball'));
 el('keeperPlaceBtn').addEventListener('click',()=>setPlace('keeper'));
@@ -1385,6 +1867,114 @@ function setPosture(p){
 }
 document.querySelectorAll('#postSeg button').forEach(b=>b.addEventListener('click',()=>setPosture(b.dataset.po)));
 
+/* ------------------------------------------------------------------ */
+/*  Defenders: the panel side                                          */
+/* ------------------------------------------------------------------ */
+/* Post defenders stand just inside the post, on the line -- 20 cm in, which
+   is where they actually put their feet to leave the keeper the post. */
+const POST_IN=HALF-0.20;
+/* Which post is the back one depends on where the ball is, so the sets that
+   care are built rather than tabled. */
+function defSet(k){
+  const far=(+el('bx').value>=0?-1:1)*POST_IN;
+  let s=[];
+  if(k==='posts')  s=[{x:-POST_IN,z:0.05,role:'post'},{x:POST_IN,z:0.05,role:'post'}];
+  if(k==='back')   s=[{x:far,z:0.05,role:'post'}];
+  // A short-corner set, in the order the jobs are called on the pitch. The
+  // badge on the chest is the array index, so this list is the numbering:
+  // running one goes furthest and charges the striker, running two follows
+  // behind and to the side for the slip. The post men are 3 and 4 -- which
+  // of them is which matters to nobody.
+  if(k==='corner') s=[{x:0,z:8.0,role:'runner'},{x:-1.4,z:3.2,role:'runner'},
+                      {x:-POST_IN,z:0.05,role:'post'},{x:POST_IN,z:0.05,role:'post'}];
+  return s.map(d=>{ const P=clampToD(d.x,d.z);
+    return {x:P.x, z:P.y, role:d.role, blk:DEF_BLOCK[d.role]}; });
+}
+function applyDefSet(k){
+  defenders=defSet(k); defSel=0; renderDefChips(); update();
+}
+function addDefender(){
+  if(defenders.length>=DEF_MAX) return;
+  // The first body goes on the back post, which is where one defender almost
+  // always is. After that they come out as runners, spaced so they do not
+  // land on top of each other.
+  const far=(+el('bx').value>=0?-1:1)*POST_IN;
+  const n=defenders.length;
+  const d=n===0?{x:far,z:0.05,role:'post'}
+                :{x:Math.max(-9,Math.min(9,(n-2)*1.6)), z:6.0, role:'runner'};
+  const P=clampToD(d.x,d.z);
+  defenders.push({x:P.x, z:P.y, role:d.role, blk:DEF_BLOCK[d.role]});
+  defSel=defenders.length-1;
+  renderDefChips(); update();
+}
+function selectDefender(i){ defSel=Math.max(0,Math.min(defenders.length-1,i)); renderDefChips(); update(); }
+function removeDefender(){
+  if(!defenders.length) return;
+  defenders.splice(defSel,1);
+  defSel=Math.max(0,Math.min(defenders.length-1,defSel));
+  renderDefChips(); update();
+}
+/* One chip per body, the selected one carrying the sliders below it. Cheaper
+   on panel height than a stack per defender, and it makes the squad legible
+   at a glance. */
+function renderDefChips(){
+  const box=el('defChips'); let h='';
+  defenders.forEach((d,i)=>{
+    h+='<button data-i="'+i+'" class="'+(i===defSel?'on':'')+'" title="'+
+       (d.role==='runner'?'runner':'post defender')+' · '+Math.round(blkOf(d)*100)+
+       '% block">D'+(i+1)+'</button>';
+  });
+  if(defenders.length<DEF_MAX) h+='<button class="add" data-add="1">+ Add</button>';
+  box.innerHTML=h;
+  box.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    if(b.dataset.add) addDefender(); else selectDefender(+b.dataset.i);
+  }));
+  const has=defenders.length>0;
+  el('defEdit').style.display=has?'block':'none';
+  el('defNone').style.display=has?'none':'block';
+  if(has){
+    const d=defenders[defSel];
+    el('dx').value=d.x.toFixed(2); el('dz').value=d.z.toFixed(2);
+    el('dbk').value=blkOf(d);
+    document.querySelectorAll('#defRoleSeg button').forEach(b=>b.classList.toggle('on',b.dataset.r===d.role));
+  }
+}
+function setDefenders(on){
+  defendersOn=on;
+  el('defBtn').textContent='Defenders: '+(on?'on':'off');
+  el('defBtn').classList.toggle('on',on);
+  el('defBtn').setAttribute('aria-pressed',String(on));
+  el('defCtl').style.display=on?'block':'none';
+  if(on && !defenders.length) defenders=defSet('back');     // something to look at at once
+  if(!on && placeMode==='defender') setPlace('defender');   // same argument toggles it off
+  renderDefChips(); update();
+}
+el('defBtn').addEventListener('click',()=>setDefenders(!defendersOn));
+el('defPlaceBtn').addEventListener('click',()=>setPlace('defender'));
+el('defDel').addEventListener('click',removeDefender);
+document.querySelectorAll('#defSetSeg button').forEach(b=>b.addEventListener('click',()=>applyDefSet(b.dataset.d)));
+document.querySelectorAll('#defRoleSeg button').forEach(b=>b.addEventListener('click',()=>{
+  const d=defenders[defSel]; if(!d) return;
+  // The chance follows the role only while it is still the old role's
+  // default. Once a number has been set for this body it is theirs, and
+  // changing what shape they are standing in should not quietly undo it.
+  if(Math.abs(blkOf(d)-DEF_BLOCK[d.role])<1e-9) d.blk=DEF_BLOCK[b.dataset.r];
+  d.role=b.dataset.r; renderDefChips(); update();
+}));
+el('dbk').addEventListener('input',()=>{
+  const d=defenders[defSel]; if(!d) return;
+  d.blk=+el('dbk').value; renderDefChips(); update();
+});
+/* The slider is not written back when the clamp bites: snapping the handle
+   mid-drag fights the drag. The record holds the clamped spot, the value
+   beside the label shows it, and the body on the pitch is where it says. */
+['dx','dz'].forEach(id=>el(id).addEventListener('input',()=>{
+  const d=defenders[defSel]; if(!d) return;
+  const P=clampToD(+el('dx').value, +el('dz').value);
+  d.x=P.x; d.z=P.y; update();
+}));
+['dw','dh'].forEach(id=>el(id).addEventListener('input',update));
+
 /* The palette drives CSS custom properties, the three materials rebuilt by
    update(), the billboard canvas and the heatmap ramp, so switching it is
    just: set the CSS vars, then redraw everything. */
@@ -1393,6 +1983,7 @@ function setPalette(p){
   const pal=PAL();
   document.documentElement.style.setProperty('--green',pal.coveredCss);
   document.documentElement.style.setProperty('--red',pal.openCss);
+  document.documentElement.style.setProperty('--defc',pal.defCoveredCss);
   const b=el('palBtn');
   b.textContent='Colours: '+(palette==='safe'?'safe':'classic');
   b.classList.toggle('on',palette==='safe');
@@ -1446,13 +2037,20 @@ const PRESETS={
   topD:   {bx:0,  bz:14.6, km:'bis', pr:'centre', off:2.0},
   tight:  {bx:11, bz:1.6,  km:'bis', pr:'near',   off:1.0},
   stroke: {bx:0,  bz:6.4,  km:'bis', pr:'centre', off:0.0},
-  oneVone:{bx:0,  bz:8.0,  km:'bis', pr:'centre', off:3.5}
+  oneVone:{bx:0,  bz:8.0,  km:'bis', pr:'centre', off:3.5},
+  // Struck from just inside the top of the circle off a stop, which is where
+  // a short corner is shot from, and the only preset that brings a set of
+  // defenders with it.
+  corner: {bx:0.5,bz:14.2, km:'bis', pr:'centre', off:0.8, def:'corner'}
 };
 function applyPreset(k){
   const p=PRESETS[k]; if(!p) return;
   el('bx').value=p.bx; el('bz').value=p.bz; el('off').value=p.off;
   keeperMode=p.km; priority=p.pr;
   setMode(keeperMode); setPriority(priority);
+  // A scenario that comes with a defensive set turns defenders on and takes
+  // it; one that does not leaves whatever is already out there alone.
+  if(p.def){ setDefenders(true); applyDefSet(p.def); }
   update();
 }
 document.querySelectorAll('#scenSeg button').forEach(b=>b.addEventListener('click',()=>applyPreset(b.dataset.s)));
@@ -1530,7 +2128,7 @@ const REACH_PARAMS=[
 ];
 const REACH={};
 REACH_PARAMS.forEach(p=>REACH[p.k]=p.def);
-let reachOn=false, reachFromUrl=false;
+let reachOn=false, reachFromUrl=false, defOnFromUrl=false;
 
 /* How far beyond the blocked silhouette the keeper could still get, in t
    seconds. Nothing until they have reacted, then a straight line.
@@ -1659,8 +2257,11 @@ let lastFlightTime=0;
    while the panel beside it said otherwise. */
 function updateHeatCaption(){
   const w = reachOn && coverageMode==='face';
+  const n = defendersOn?defenders.length:0;
   el('heatCap').textContent=(w?'Weighted coverage':'Static coverage')+
-    ' % from every shot spot in the D, for the current keeper setup. Recompute after changes.';
+    ' % from every shot spot in the D, for the current keeper setup'+
+    (n?' and the '+n+' defender'+(n>1?'s':'')+' where they stand':'')+
+    '. Recompute after changes.';
 }
 function setReach(on){
   reachOn=on;
@@ -1712,36 +2313,78 @@ function bestSaveAt(s,h,parts,t){
    close-range shots where it matters most. */
 let lastField=null;
 const FIELD_STEP=0.06;                                    // metres across the goal mouth
-/* The weighting for any point on the goal mouth, for one shot and one keeper position.
-   Shared so the picture on the goal and the sweep across the pitch cannot drift
-   apart: they are the same question asked at different resolutions. */
-function fieldSampler(B,K,parts){
-  const Bv=new THREE.Vector3(B.x,BALL_R,B.y);
-  const Kp=new THREE.Vector3(K.x,0,K.y);
+/* The weighting for any point on the goal mouth, for one shot and one keeper
+   position. Shared so the picture on the goal and the sweep across the pitch
+   cannot drift apart: they are the same question asked at different
+   resolutions.
+
+   Defenders wrap the keeper's answer rather than sitting beside it. One place
+   to fold them in, and everything downstream -- the drawn field, the panel
+   figure, the sweep across the pitch -- counts them without knowing they are
+   there. */
+function fieldSampler(B,K,parts,defShots){
+  const defs=(defShots&&defShots.length)?defShots:null;
+  let keeperAt=null;
   const n=new THREE.Vector3(B.x-K.x,0,B.y-K.y);
-  if(n.lengthSq()<1e-9) return null;
-  n.normalize();
-  const perp=new THREE.Vector3(n.z,0,-n.x);
-  const denomBase=Kp.clone().sub(Bv).dot(n);
-  const P=new THREE.Vector3(), Q=new THREE.Vector3();
+  if(n.lengthSq()>=1e-9){
+    const Bv=new THREE.Vector3(B.x,BALL_R,B.y);
+    const Kp=new THREE.Vector3(K.x,0,K.y);
+    n.normalize();
+    const perp=new THREE.Vector3(n.z,0,-n.x);
+    const denomBase=Kp.clone().sub(Bv).dot(n);
+    const P=new THREE.Vector3(), Q=new THREE.Vector3();
+    keeperAt=(X,Y)=>{
+      P.set(X,Y,0);
+      const dir=P.clone().sub(Bv);
+      const den=dir.dot(n);
+      if(Math.abs(den)<1e-9) return 0;
+      const u=denomBase/den;
+      if(u<=0) return 0;                                   // goal is behind the keeper's plane
+      Q.copy(Bv).addScaledVector(dir,u);
+      const t=Q.distanceTo(Bv)/REACH.bs;
+      return Math.max(0,Math.min(1,bestSaveAt(Q.clone().sub(Kp).dot(perp), Q.y, parts, t)));
+    };
+  }
+  // Nobody to ask: the keeper is standing on the ball and there are no bodies
+  // in front of them.
+  if(!defs) return keeperAt;
+  /* A defender in the line is not a reach problem -- they are standing in the
+     flight path already -- but nor are they a wall. The keeper's parts each
+     carry their own odds of turning a ball they meet; a defender gets one
+     number for the whole body, because there is no useful sense in which an
+     outfielder's hip is a better block than their shin -- but one number
+     each, since a planted post man and a runner arriving at full tilt are not
+     the same proposition either.
+
+     Two bodies in line are two separate things to beat, so they compound; and
+     a ball that beats them all is still the keeper's to save, which is what
+     stops a runner charging out ever making the picture worse than leaving
+     the keeper to it. */
   return (X,Y)=>{
-    P.set(X,Y,0);
-    const dir=P.clone().sub(Bv);
-    const den=dir.dot(n);
-    if(Math.abs(den)<1e-9) return 0;
-    const u=denomBase/den;
-    if(u<=0) return 0;                                     // goal is behind the keeper's plane
-    Q.copy(Bv).addScaledVector(dir,u);
-    const t=Q.distanceTo(Bv)/REACH.bs;
-    return Math.max(0,Math.min(1,bestSaveAt(Q.clone().sub(Kp).dot(perp), Q.y, parts, t)));
+    let through=1;
+    for(const s of defs) if(pointInPoly(s.poly,X,Y)) through*=(1-s.blk);
+    const pd=1-through;
+    if(pd>=0.9999) return 1;
+    return pd + (1-pd)*(keeperAt?keeperAt(X,Y):0);
   };
+}
+/* Each defender's shape on the goal face as seen from one shot spot, paired
+   with that body's odds. faceCoverage reads the ball position off the module
+   globals, so the caller must have set them for this spot. */
+function defShotsFrom(S,dfs){
+  const out=[];
+  for(const d of dfs){
+    const f=faceCoverage(S,d.P,d.sil.poly);
+    if(f&&f.poly.length>=3) out.push({poly:f.poly, blk:d.blk});
+  }
+  return out;
 }
 /* Mean weighting over the whole goal mouth: the figure the panel shows. Coarser
    than the drawn field, because the pitch sweep asks for it once per shot spot
    and the cell counts multiply. */
 const HEAT_FIELD_STEP=0.15;
-function weightedCoverage(B,K,parts){
-  const at=fieldSampler(B,K,parts);
+function weightedCoverage(B,K,parts,defShots){
+  const at=fieldSampler(B,K,parts,defShots);
   if(!at) return 0;
   let sum=0, n=0;
   for(let X=-HALF; X<HALF-1e-9; X+=HEAT_FIELD_STEP){
@@ -1752,8 +2395,8 @@ function weightedCoverage(B,K,parts){
   }
   return n?sum/n:0;
 }
-function buildSaveField(B,K,parts){
-  const at=fieldSampler(B,K,parts);
+function buildSaveField(B,K,parts,defShots){
+  const at=fieldSampler(B,K,parts,defShots);
   if(!at) return null;
   const pos=[], col=[], cells=[]; let sum=0, n2=0;
   for(let X=-HALF; X<HALF-1e-9; X+=FIELD_STEP){
@@ -1780,6 +2423,12 @@ function serialise(){
   return { bx:+el('bx').value, bz:+el('bz').value, km:keeperMode, pr:priority, off:+el('off').value,
     kx:+el('kx').value, kz:+el('kz').value, kw:+el('kw').value, kh:+el('kh').value, om:+el('offMax').value,
     cov:coverageMode, po:posture, cm:coordMode, ov, pal:palette,
+    // The defenders as one field: x~z~role per body, bodies separated by "!".
+    // Both characters survive encodeURIComponent, so the hash stays readable.
+    // Absent on an older link, which lands on none, exactly as pal did.
+    df:defendersOn?1:0, dw:+el('dw').value, dh:+el('dh').value,
+    dfn:defenders.map(d=>[d.x.toFixed(2),d.z.toFixed(2),d.role==='runner'?'r':'p',
+                          blkOf(d).toFixed(2)].join('~')).join('!'),
     // Reach parameters as one field, ordered by REACH_PARAMS, so a tuned model
     // travels with the link. Absent on an older link, which falls back to the
     // defaults exactly as pal did.
@@ -1810,6 +2459,25 @@ function readUrl(){
     el('off').max=m; if(+el('off').value>m) el('off').value=m;
     el('offMaxVal').textContent=m.toFixed(1)+' m';
   }
+  setv('dw',p.dw); setv('dh',p.dh);
+  if(p.dfn){
+    defenders=p.dfn.split('!').slice(0,DEF_MAX).map(s=>{
+      // Empty fields as well as unparseable ones: "+''" is 0, not NaN, so a
+      // hand-trimmed hash would otherwise conjure a body on the goal line.
+      const v=s.split('~');
+      if(v.length<2||v[0]===''||v[1]==='') return null;
+      const x=+v[0], z=+v[1];
+      if(!Number.isFinite(x)||!Number.isFinite(z)) return null;
+      const P=clampToD(x,z), role=v[2]==='r'?'runner':'post';
+      // A fourth field is the body's own odds. Links written before they were
+      // split carry three, and land on the role's default.
+      const b=+v[3];
+      return {x:P.x, z:P.y, role,
+        blk:(v.length>3&&v[3]!==''&&Number.isFinite(b))?Math.max(0.1,Math.min(1,b)):DEF_BLOCK[role]};
+    }).filter(Boolean);
+    defSel=0;
+  }
+  if(p.df==='1') defOnFromUrl=true;
   if(p.pal==='safe'||p.pal==='classic') palette=p.pal;
   if(p.rch){
     const v=p.rch.split('~').map(Number);
@@ -1818,11 +2486,19 @@ function readUrl(){
       reachFromUrl=true;
     }
   }
-  if(p.cm) coordMode=p.cm;
-  if(p.km) keeperMode=p.km;
-  if(p.pr) priority=p.pr;
-  if(p.cov) coverageMode=p.cov;
-  if(p.po) posture=(p.po==='spread'?'spread':'set');
+  /* The enumerated fields, checked against what they can actually be. Taken
+     at face value, an unknown value reaches a setter that compares it against
+     each legal one and matches none -- which for the coordinate and keeper
+     modes hides both halves of the control, so "#cm=xyz" left a hand-edited
+     link with no ball sliders at all. An unreadable field should land on the
+     default, the way po, pal, rch and cam already do. Absent or empty keeps
+     whatever is current, which is what the old guards did. */
+  const pick=(v,allowed,fallback)=>allowed.indexOf(v)>=0?v:fallback;
+  coordMode   =pick(p.cm, ['cart','polar'],        coordMode);
+  keeperMode  =pick(p.km, ['bis','free'],          keeperMode);
+  priority    =pick(p.pr, ['near','centre','far'], priority);
+  coverageMode=pick(p.cov,['ground','face'],       coverageMode);
+  posture     =pick(p.po, ['set','spread'],        posture);
   if(p.cam){
     const c=p.cam.split('~').map(Number);
     if(c.length===6&&c.every(Number.isFinite)){
@@ -1854,6 +2530,7 @@ function initFromUrl(){
   setPriority(priority);
   setCoverageMode(coverageMode);
   setPosture(posture);
+  setDefenders(defOnFromUrl);
   grid.visible=el('oGrid').checked;
   hudVisible=el('oBillboard').checked;
 }

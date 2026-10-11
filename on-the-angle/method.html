@@ -107,7 +107,36 @@ weight         = 1 if the gap is zero, else the chance reach turns out to be eno
      and you lose the same again, so the boundary fades instead of stopping dead. Set that to nothing
      and the whole thing collapses back to the plain covered-or-open picture.</p>
 
-  <h2>The parameters</h2>
+  <h2>Defenders</h2>
+<p>Switch defenders on and up to six outfield bodies can stand anywhere in the circle &mdash; one on
+the back post in open play, or a full short-corner set. They are built from the same parts as the
+keeper with their own kit: no pads, no gloves, a narrower body, and a stick that is the only thing
+reaching past it. Two roles, because the two jobs look nothing alike from the ball: a
+<strong>post</strong> defender stands tall on the line with the stick down beside the post, and a
+<strong>runner</strong> charges out low with it stretched in front.</p>
+<p>In the geometric figure a defender is simply another shadow, merged with the keeper&rsquo;s so two
+bodies in line are never counted twice. Net a defender covers is shaded a darker tone of the same
+colour: still covered, by somebody else.</p>
+<p>In the weighted figure they are not a wall. A keeper&rsquo;s parts each carry their own odds of
+turning a ball they meet; a defender carries one number for the whole body, because there is no
+useful sense in which an outfielder&rsquo;s hip is a better block than their shin. But one number
+each, since a planted post man and a runner arriving at full tilt are not the same proposition.</p>
+<table>
+<tr><th>Role</th><th class="n">Default block chance</th></tr>
+<tr><td>Post defender &mdash; planted, set, facing the shot</td><td class="n">0.85</td></tr>
+<tr><td>Runner &mdash; arriving at speed into a flick</td><td class="n">0.60</td></tr>
+</table>
+<p>Both are starting points you can move per body; neither is measured, and you should treat them as
+knobs rather than findings. Bodies in line compound &mdash; beating the first still leaves the
+second &mdash; and whatever gets through is still the keeper&rsquo;s to deal with, so a runner
+charging out can never make the figure worse than leaving the keeper to it.</p>
+<div class="eq">through  = (1 - chance of body 1) x (1 - chance of body 2) x ...
+weight   = (1 - through) + through x the keeper's own weight for that point</div>
+<p>A defender&rsquo;s shadow is geometry and does not depend on the block chance: the body is in the
+way whatever the odds are once it is there. That is why sliding the chance moves the weighted
+figure and leaves <em>goal face covered</em> alone.</p>
+
+<h2>The parameters</h2>
   <table>
     <tr><th>Parameter</th><th class="n">Default</th><th>Grounding</th></tr>
     <tr><td>Ball speed</td><td class="n">22 m/s</td><td>Drag-flick studies measure 18&ndash;28 m/s</td></tr>
