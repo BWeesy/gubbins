@@ -264,3 +264,12 @@ statementflow/**/*.pdf
 !statementflow/tests/fixtures/*_synthetic.csv
 # Local uv virtualenv for the module.
 statementflow/.venv/
+
+# house-pig: the vacuum map is a floor plan of the house and this repo is
+# PUBLIC. Only the tool and map.example.js are committed; the map image and
+# the local settings (calibration, dock position, zone) stay on disk.
+house-pig/*.local.js
+house-pig/**/*.png
+house-pig/**/*.jpg
+house-pig/**/*.jpeg
+house-pig/**/*.webp
