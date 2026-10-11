@@ -1518,10 +1518,28 @@ function update(){
   const faceAll=multi?allDec.area/(GOAL_W*GOAL_H)*100:facePct;
   const useFace=(coverageMode==='face');
   const headPct=useFace?faceAll:covPct;
-  // What the bodies in front of the keeper are worth, in percentage points of
-  // the same metric the headline uses.
-  const addPct=useFace?Math.max(0,faceAll-facePct)
-                      :Math.max(0,covPct-kCoveredW/GOAL_W*100);
+  /* What the bodies in front of the keeper are worth, in percentage points of
+     whichever metric the headline is actually showing.
+
+     The geometric delta is the wrong answer once the weighted picture is up,
+     and wrong by a lot: a body blocks its whole shadow in the shadow figure
+     whatever its odds, so a defender at 60% was reading +48 beside a weighted
+     headline it had moved by 23. Two numbers in different units, side by
+     side, inviting you to subtract them.
+
+     Measured again against the weighted figure when that is what is on
+     screen. Both halves are taken at the sweep's resolution rather than the
+     drawn field's, so the difference between them is self-consistent -- but
+     it will not reconcile exactly with the headline, which is drawn finer.
+     Subtracting one from the other lands within about 3 points. Closing that
+     would mean sampling the whole mouth a second time at the fine step on
+     every update, which is a lot of frame time for a secondary readout. */
+  const weightedHead = reachOn && useFace && el('oCover').checked && multi;
+  const addPct = weightedHead
+    ? Math.max(0,(weightedCoverage(B,K,sil.parts,defShots)
+                 -weightedCoverage(B,K,sil.parts,null))*100)
+    : useFace ? Math.max(0,faceAll-facePct)
+              : Math.max(0,covPct-kCoveredW/GOAL_W*100);
 
 
   /* ---- rebuild overlays ---- */
