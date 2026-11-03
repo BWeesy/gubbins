@@ -20,3 +20,11 @@ coordinates to paste into Home Assistant. The map itself is gitignored.
 An interactive 3D model of field-hockey goalkeeper positioning, published to
 GitHub Pages at <https://bweesy.github.io/gubbins/on-the-angle/>. One
 self-contained HTML page; no build step.
+
+### sound-lab
+
+A browser page for designing short game sound effects (pings, thuds,
+explosions, dings) and downloading them as WAV files. Everything is
+synthesised, so the results are free to use anywhere. Published to GitHub Pages
+at <https://bweesy.github.io/gubbins/sound-lab/>. One self-contained HTML page;
+no build step.
