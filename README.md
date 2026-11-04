@@ -21,6 +21,12 @@ An interactive 3D model of field-hockey goalkeeper positioning, published to
 GitHub Pages at <https://bweesy.github.io/gubbins/on-the-angle/>. One
 self-contained HTML page; no build step.
 
+### authority-tracker
+
+Web pages for BWeesy's Authority Tracker, an Android app. Currently just its
+privacy policy, published at
+<https://bweesy.github.io/gubbins/authority-tracker/privacy/>.
+
 ### sound-lab
 
 A browser page for designing short game sound effects (pings, thuds,
