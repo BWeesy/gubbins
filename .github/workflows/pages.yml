@@ -6,7 +6,7 @@ name: pages
 # whole site, so dev and production are two paths inside a single artifact and
 # every run rebuilds both:
 #
-#   production   /gubbins/            and  /gubbins/on-the-angle/      /gubbins/sound-lab/
+#   production   /gubbins/            and  /gubbins/on-the-angle/      /gubbins/sound-lab/      /gubbins/authority-tracker/
 #   dev          /gubbins/dev/        and  /gubbins/dev/on-the-angle/  /gubbins/dev/sound-lab/
 #
 # Dev is whatever is on main. Production is whatever the `prod` tag points at,
@@ -21,6 +21,7 @@ on:
     paths:
       - 'on-the-angle/**'
       - 'sound-lab/**'
+      - 'authority-tracker/**'
       - '.github/pages/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
@@ -82,7 +83,7 @@ jobs:
             # A tool only reaches production once the commit `prod` points at
             # contains it, so a folder newer than that commit is skipped there
             # rather than failing the whole deploy.
-            for tool in on-the-angle sound-lab; do
+            for tool in on-the-angle sound-lab authority-tracker; do
               if [ -d "$1/$tool" ]; then cp -R "$1/$tool" "$2/$tool"; fi
             done
             # READMEs are for people reading the repo, not visitors to the site.
