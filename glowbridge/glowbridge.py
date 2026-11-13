@@ -55,7 +55,7 @@ from typing import Any
 
 import requests
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 GLOWMARKT_BASE_URL = "https://api.glowmarkt.com/api/v0-1"
 # Application ID published by Hildebrand for the Bright app. Overridable in
@@ -967,11 +967,15 @@ class HaImporter:
                 "id": self._id,
                 "type": "recorder/import_statistics",
                 "metadata": {
-                    "has_mean": False,
+                    # mean_type 0 is StatisticMeanType.NONE. It and unit_class
+                    # replace has_mean; HA warns without them and will
+                    # eventually reject the import.
+                    "mean_type": 0,
                     "has_sum": True,
                     "name": name,
                     "source": STAT_SOURCE,
                     "statistic_id": statistic_id,
+                    "unit_class": "energy",
                     "unit_of_measurement": "kWh",
                 },
                 "stats": stats,
@@ -992,11 +996,22 @@ class HaImporter:
                 pass
             self.ws = None
 
+    # A dropped socket (HA restarting mid-cycle), a recv timeout or a garbled
+    # frame is a failed cycle like any other: CycleError, so it is retried
+    # with backoff and shows in status.json instead of crashing the daemon.
     def _send(self, msg: dict) -> None:
-        self.ws.send(json.dumps(msg))
+        try:
+            self.ws.send(json.dumps(msg))
+        except (self._websocket.WebSocketException, OSError) as exc:
+            raise CycleError(f"Home Assistant connection lost: {exc}") from exc
 
     def _recv(self) -> dict:
-        return json.loads(self.ws.recv())
+        try:
+            return json.loads(self.ws.recv())
+        except (self._websocket.WebSocketException, OSError) as exc:
+            raise CycleError(f"Home Assistant connection lost: {exc}") from exc
+        except ValueError as exc:
+            raise CycleError(f"unreadable Home Assistant message: {exc}") from exc
 
 
 # --------------------------------------------------------------------------
@@ -1144,7 +1159,14 @@ class Bridge:
                     self.state.clear_token()
                     self.client.set_token("")
                     self.ensure_token(now, force=True)
-                    imported_hours += self._process_resource(rid, now)
+                    try:
+                        imported_hours += self._process_resource(rid, now)
+                    except TokenExpired as exc:
+                        # Rejecting a token it has only just issued will not
+                        # fix itself; abandon the cycle rather than crash.
+                        raise AuthError(
+                            "Glowmarkt rejected a freshly issued token"
+                        ) from exc
                 except ResourceMissing:
                     self.rediscover(rid, now)
                     # Replacement resources are polled next cycle; this cycle
