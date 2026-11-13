@@ -118,7 +118,24 @@ def fake_fs(**overrides) -> hsm.Fs:
     links = {
         "/nix/var/nix/profiles/system": "system-42-link",
     }
-    real = {"/run/current-system": "/nix/store/b", "/run/booted-system": "/nix/store/a"}
+    # Booted and current systems differ only in a unit file: same kernel,
+    # initrd and modules, so no reboot is needed.
+    real = {
+        "/run/booted-system": "/nix/store/a-system",
+        "/run/current-system": "/nix/store/b-system",
+        "/run/booted-system/kernel": "/nix/store/k1/bzImage",
+        "/run/current-system/kernel": "/nix/store/k1/bzImage",
+        "/run/booted-system/initrd": "/nix/store/i1/initrd",
+        "/run/current-system/initrd": "/nix/store/i1/initrd",
+        "/run/booted-system/kernel-modules": "/nix/store/m1",
+        "/run/current-system/kernel-modules": "/nix/store/m1",
+    }
+
+    def realpath(p):
+        try:
+            return real[p]
+        except KeyError:
+            raise FileNotFoundError(p) from None
 
     def read_text(p):
         try:
@@ -136,7 +153,7 @@ def fake_fs(**overrides) -> hsm.Fs:
             "other",
         ],
         readlink=lambda p: links[p],
-        realpath=lambda p: real[p],
+        realpath=realpath,
         link_mtime=lambda p: 1_700_000_000.0,
         statvfs=lambda p: SimpleNamespace(f_blocks=1000, f_bavail=250, f_frsize=2**20),
     )
@@ -274,7 +291,8 @@ def test_host_health_happy_path(host, runner):
     gens = h["generations"]
     assert (gens["current"], gens["previous"]) == (42, 41)
     assert [g["generation"] for g in gens["recent"]] == [40, 41, 42]
-    assert gens["reboot_pending"] is True
+    assert gens["reboot_pending"] is False
+    assert gens["reboot_reasons"] == []
 
 
 def test_host_health_degrades_per_section(runner):
@@ -485,6 +503,66 @@ def test_config_rejects_bad_last_run_file():
 def test_subprocess_runner_missing_binary():
     res = hsm.subprocess_runner(["/definitely/not/here"])
     assert res.returncode == 127
+
+
+# --------------------------------------------------------------------------
+# reboot_pending
+# --------------------------------------------------------------------------
+
+
+def _realpaths(**changes):
+    base = {
+        "/run/booted-system": "/nix/store/a-system",
+        "/run/current-system": "/nix/store/b-system",
+    }
+    for part in hsm.BOOT_COMPONENTS:
+        for side in ("booted", "current"):
+            base[f"/run/{side}-system/{part}"] = f"/nix/store/{part}-1"
+    base.update(changes)
+
+    def realpath(p):
+        if base.get(p) is None:
+            raise FileNotFoundError(p)
+        return base[p]
+
+    return realpath
+
+
+def _host_with(realpath, runner):
+    return hsm.Host(
+        hsm.parse_config(RAW_CONFIG), run=runner, fs=fake_fs(realpath=realpath)
+    )
+
+
+def test_reboot_not_pending_after_ordinary_switch(runner):
+    # The whole system changed (a new unit), but nothing boot-time did.
+    gens = _host_with(_realpaths(), runner).generations()
+    assert (gens["reboot_pending"], gens["reboot_reasons"]) == (False, [])
+
+
+@pytest.mark.parametrize("part", ["kernel", "initrd", "kernel-modules"])
+def test_reboot_pending_names_the_changed_component(runner, part):
+    rp = _realpaths(**{f"/run/current-system/{part}": f"/nix/store/{part}-2"})
+    gens = _host_with(rp, runner).generations()
+    assert (gens["reboot_pending"], gens["reboot_reasons"]) == (True, [part])
+
+
+def test_component_missing_on_both_sides_is_not_a_change(runner):
+    rp = _realpaths(
+        **{"/run/booted-system/initrd": None, "/run/current-system/initrd": None}
+    )
+    assert _host_with(rp, runner).generations()["reboot_pending"] is False
+
+
+def test_component_appearing_is_a_change(runner):
+    rp = _realpaths(**{"/run/booted-system/initrd": None})
+    assert _host_with(rp, runner).generations()["reboot_reasons"] == ["initrd"]
+
+
+def test_no_booted_system_leaves_the_flag_out(runner):
+    rp = _realpaths(**{"/run/booted-system": None})
+    gens = _host_with(rp, runner).generations()
+    assert "reboot_pending" not in gens and "reboot_reasons" not in gens
 
 
 if __name__ == "__main__":
