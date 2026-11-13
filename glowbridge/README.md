@@ -172,7 +172,7 @@ secrets):
 
 ```json
 {
-  "bridge_version": "1.0.0",
+  "bridge_version": "1.0.1",
   "last_attempt": "...", "last_success": "...",
   "consecutive_failures": 0, "next_planned_update": "...",
   "last_error": "",

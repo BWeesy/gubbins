@@ -454,13 +454,19 @@ class FakeWs:
         self.sent.append(json.loads(data))
 
     def recv(self):
-        return json.dumps(self.script.pop(0))
+        item = self.script.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return json.dumps(item)
 
     def close(self):
         self.closed = True
 
 
 class FakeWsModule:
+    class WebSocketException(Exception):
+        pass
+
     def __init__(self, ws):
         self._ws = ws
         self.urls: list[str] = []
@@ -496,6 +502,9 @@ class TestHaImporter:
         assert msg["metadata"]["statistic_id"] == "glowbridge:electricity_consumption"
         assert msg["metadata"]["source"] == "glowbridge"
         assert msg["metadata"]["has_sum"] is True
+        assert msg["metadata"]["mean_type"] == 0
+        assert "has_mean" not in msg["metadata"]
+        assert msg["metadata"]["unit_class"] == "energy"
         assert msg["metadata"]["unit_of_measurement"] == "kWh"
         assert msg["stats"][0]["sum"] == 0.5
 
@@ -515,6 +524,20 @@ class TestHaImporter:
         )
         imp.connect()
         with pytest.raises(gb.CycleError, match="rejected import"):
+            imp.import_statistics("glowbridge:x", "X", [])
+
+    def test_dropped_socket_raises_cycleerror(self):
+        imp, _ = make_importer(
+            [self.REQ, self.OK, FakeWsModule.WebSocketException("closed")]
+        )
+        imp.connect()
+        with pytest.raises(gb.CycleError, match="connection lost"):
+            imp.import_statistics("glowbridge:x", "X", [])
+
+    def test_recv_timeout_raises_cycleerror(self):
+        imp, _ = make_importer([self.REQ, self.OK, TimeoutError("timed out")])
+        imp.connect()
+        with pytest.raises(gb.CycleError, match="connection lost"):
             imp.import_statistics("glowbridge:x", "X", [])
 
 
@@ -697,6 +720,15 @@ class TestCycle:
         bridge.run_cycle(self.WM + 4 * HOUR)
         assert client.auth_calls == 1
         assert state.cumulative_at_settled("res-elec") == 1000
+
+    def test_token_rejected_after_reauth_is_autherror(self, tmp_path):
+        client = self._client([0.5, 0.25, 0.25, 0.5])
+        client.fail_readings = [gb.TokenExpired(), gb.TokenExpired()]
+        bridge, state = make_bridge(tmp_path, client, FakeImporter())
+        state.set_token("stale", datetime.now(tz=UTC))
+        with pytest.raises(gb.AuthError, match="freshly issued"):
+            bridge.run_cycle(self.WM + 4 * HOUR)
+        assert client.auth_calls == 1
 
     def test_pinned_resource_404_is_fatal(self, tmp_path):
         client = FakeGlowClient()
