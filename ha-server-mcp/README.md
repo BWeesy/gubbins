@@ -22,6 +22,8 @@ the client cannot choose what runs.
 | `system_rollback` | Starts the fixed rollback unit: back one generation, then activate. Returns at once. |
 
 There is no tool that runs an arbitrary command, and none ever will be added.
+For what each tool actually returns, its limits and its edge cases (as
+observed on a live host), see [TOOLS.md](TOOLS.md).
 
 ## Design decisions
 
