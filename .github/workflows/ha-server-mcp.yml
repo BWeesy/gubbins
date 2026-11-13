@@ -1,0 +1,99 @@
+name: ha-server-mcp
+
+on:
+  push:
+    paths:
+      - 'ha-server-mcp/**'
+      - '.github/workflows/ha-server-mcp.yml'
+      - 'flake.nix'
+      - 'flake.lock'
+  pull_request:
+    paths:
+      - 'ha-server-mcp/**'
+      - '.github/workflows/ha-server-mcp.yml'
+      - 'flake.nix'
+      - 'flake.lock'
+  schedule:
+    # Pinned dependencies do not change, but advisories against them do.
+    # Re-audit weekly so a newly published CVE surfaces on its own.
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ha-server-mcp
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        # Pinned exact: setup-uv does not publish a moving major tag.
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          # Deps are pinned in per-script PEP 723 lockfiles, so the cache key
+          # must track those or it never invalidates.
+          cache-dependency-glob: '**/*.py.lock'
+
+      # Ruff is pinned: an unpinned lint can start failing CI on an
+      # unrelated push purely because a new release added a rule.
+      - name: Lint
+        run: |
+          uvx ruff@0.15.22 check ha_server_mcp.py test_ha_server_mcp.py nix/vm-test-client.py
+          uvx ruff@0.15.22 format --check ha_server_mcp.py test_ha_server_mcp.py
+
+      # --locked fails if the lockfile and the PEP 723 inline metadata have
+      # drifted, so this doubles as the "did you forget to re-lock?" gate.
+      - name: Tests
+        run: uv run --locked --script test_ha_server_mcp.py
+
+      - name: Server lockfile is current
+        run: uv run --locked --script ha_server_mcp.py --version
+
+      # pip-audit exits non-zero on a finding, which fails the build by design.
+      - name: Audit dependencies
+        run: |
+          uv export --script ha_server_mcp.py --format requirements-txt > "${RUNNER_TEMP}/server-requirements.txt"
+          uv export --script test_ha_server_mcp.py --format requirements-txt > "${RUNNER_TEMP}/test-requirements.txt"
+          uvx pip-audit -r "${RUNNER_TEMP}/server-requirements.txt"
+          uvx pip-audit -r "${RUNNER_TEMP}/test-requirements.txt"
+
+  # The module is the security boundary (user, forced command, sudo rules),
+  # so it gets a real VM test, not just an evaluation: nix/vm-test.nix boots
+  # it and drives every tool over ssh. Not on the weekly schedule — that run
+  # exists for the dependency audit only.
+  nixos-vm-test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v7
+
+      # Hosted Ubuntu runners expose /dev/kvm but only to root; open it up so
+      # the Nix build user can boot the test VM with acceleration.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.5
+        with:
+          extra_nix_config: |
+            system-features = nixos-test benchmark big-parallel kvm
+
+      - name: Build package and run VM test
+        run: >
+          nix build --print-build-logs
+          .#checks.x86_64-linux.ha-server-mcp-package
+          .#checks.x86_64-linux.ha-server-mcp-vm

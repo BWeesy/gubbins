@@ -34,3 +34,10 @@ explosions, dings) and downloading them as WAV files. Everything is
 synthesised, so the results are free to use anywhere. Published to GitHub Pages
 at <https://bweesy.github.io/gubbins/sound-lab/>. One self-contained HTML page;
 no build step.
+
+### ha-server-mcp
+
+A small MCP server, reached over a restricted SSH key, that lets an AI
+assistant check a NixOS home server's health, read glowbridge's status and an
+allow-list of logs, and trigger a NixOS upgrade or rollback from the host's
+git-held config. No generic command access. Ships as a NixOS module.
