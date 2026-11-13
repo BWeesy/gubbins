@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 log = logging.getLogger("ha-server-mcp")
 
@@ -105,6 +105,10 @@ class VmConfig:
 class JobConfig:
     unit: str
     start_helper: str
+    # JSON record of the job's last completed run, written by the unit
+    # itself (see nix/module.nix). systemd forgets a oneshot's result and
+    # timestamps once it unloads the idle unit, so this is the durable copy.
+    last_run_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -132,9 +136,13 @@ def _need(obj: dict, key: str, kind: type, where: str) -> Any:
 
 def _job(raw: dict, key: str) -> JobConfig:
     job = _need(raw, key, dict, "")
+    last_run = job.get("last_run_file")
+    if last_run is not None and not isinstance(last_run, str):
+        raise ConfigError(f"{key}.last_run_file must be a str")
     return JobConfig(
         unit=_need(job, "unit", str, f"{key}."),
         start_helper=_need(job, "start_helper", str, f"{key}."),
+        last_run_file=last_run,
     )
 
 
@@ -518,17 +526,32 @@ class Host:
         for unit in (job.unit, other.unit):
             if self._unit_busy(unit):
                 return {"started": False, "reason": f"{unit} is already running"}
-        before = self.unit_state(job.unit).get("ExecMainStartTimestamp", "")
+        previous = self.last_run(job)
         res = self._sudo(job.start_helper)
         if res.returncode != 0:
             return {"started": False, "reason": _err(res)}
         return {
             "started": True,
             "unit": job.unit,
-            "previous_run_started": before or None,
+            # Compare with upgrade_status's last_run to tell this run's
+            # result from the one before it.
+            "previous_run": previous,
             "next": f"{what} runs in the background and takes minutes; poll"
             " upgrade_status until the unit is no longer activating.",
         }
+
+    def last_run(self, job: JobConfig) -> dict[str, Any] | None:
+        """The job's last completed run, or None if it has never finished
+        one (or the module predates the record)."""
+        if job.last_run_file is None:
+            return None
+        try:
+            record = json.loads(self.fs.read_text(job.last_run_file))
+        except FileNotFoundError:
+            return None
+        except (OSError, json.JSONDecodeError) as exc:
+            return {"error": f"cannot read {job.last_run_file}: {exc}"}
+        return record if isinstance(record, dict) else {"error": "malformed record"}
 
     def system_upgrade(self) -> dict[str, Any]:
         out = self._start(self.cfg.upgrade, self.cfg.rollback, "The upgrade")
@@ -546,7 +569,15 @@ class Host:
             ("upgrade", self.cfg.upgrade),
             ("rollback", self.cfg.rollback),
         ):
-            entry = self.unit_state(job.unit)
+            state = self.unit_state(job.unit)
+            # Only the live state comes from systemd: once the idle unit is
+            # unloaded, its Result and timestamps read back as defaults
+            # ("success", blank), which would misreport a finished run.
+            entry: dict[str, Any] = {"unit": job.unit}
+            for prop in ("error", "ActiveState", "SubState"):
+                if prop in state:
+                    entry[prop] = state[prop]
+            entry["last_run"] = self.last_run(job)
             journal = self._journal(job.unit, log_lines)
             entry["log"] = journal.get("lines", journal.get("error"))
             out[key] = entry
@@ -608,8 +639,9 @@ def build_server(host: Host):
 
     @mcp.tool()
     def upgrade_status(log_lines: int = 60) -> dict[str, Any]:
-        """State, result and log tail of the last upgrade and rollback runs,
-        plus the current and previous NixOS generations. Read-only."""
+        """Live state, last completed run (start, finish, result, exit
+        status) and log tail of the upgrade and rollback jobs, plus the
+        current and previous NixOS generations. Read-only."""
         return host.upgrade_status(log_lines)
 
     @mcp.tool()

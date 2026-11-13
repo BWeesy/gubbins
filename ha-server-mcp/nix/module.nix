@@ -66,6 +66,36 @@ let
   upgradeHelper = startHelper "upgrade" upgradeUnit rollbackUnit;
   rollbackHelper = startHelper "rollback" rollbackUnit upgradeUnit;
 
+  # Each job records its last completed run in a small JSON file the server
+  # reads directly. systemd itself is no use for this: once an idle oneshot
+  # is unloaded, `systemctl show` reports its Result as "success" and its
+  # timestamps as blank, whatever actually happened. The record holds unit
+  # outcomes only (no output), so it is world-readable.
+  stateDir = "/var/lib/ha-server-mcp";
+  lastRunFile = job: "${stateDir}/${job}.json";
+  markStarted = job: helper "${job}-started" ''
+    ${pkgs.coreutils}/bin/date -Is > "$STATE_DIRECTORY/${job}.started"
+  '';
+  # ExecStopPost runs after success and failure alike; systemd passes the
+  # outcome in SERVICE_RESULT / EXIT_CODE / EXIT_STATUS. Those are plain
+  # tokens ("exit-code", "exited", "1") that need no JSON escaping.
+  recordRun = job: helper "${job}-record" ''
+    dir="$STATE_DIRECTORY"
+    started=$(${pkgs.coreutils}/bin/cat "$dir/${job}.started" 2>/dev/null || true)
+    finished=$(${pkgs.coreutils}/bin/date -Is)
+    printf '{"started_at": "%s", "finished_at": "%s", "result": "%s", "exit_code": "%s", "exit_status": "%s"}\n' \
+      "$started" "$finished" "''${SERVICE_RESULT:-}" "''${EXIT_CODE:-}" "''${EXIT_STATUS:-}" \
+      > "$dir/${job}.json.tmp"
+    ${pkgs.coreutils}/bin/mv "$dir/${job}.json.tmp" "$dir/${job}.json"
+  '';
+  jobServiceConfig = job: {
+    Type = "oneshot";
+    StateDirectory = "ha-server-mcp";
+    StateDirectoryMode = "0755";
+    ExecStartPre = "${markStarted job}";
+    ExecStopPost = "${recordRun job}";
+  };
+
   logUnits = lib.unique (
     lib.optional cfg.glowbridge.enable cfg.glowbridge.unit
     ++ cfg.extraLogUnits
@@ -99,8 +129,16 @@ let
       else null;
     vm = if vmEnabled then { name = cfg.vm.name; helper = "${vmHelper}"; } else null;
     log_units = lib.mapAttrs (_: h: "${h}") journalHelpers;
-    upgrade = { unit = upgradeUnit; start_helper = "${upgradeHelper}"; };
-    rollback = { unit = rollbackUnit; start_helper = "${rollbackHelper}"; };
+    upgrade = {
+      unit = upgradeUnit;
+      start_helper = "${upgradeHelper}";
+      last_run_file = lastRunFile "upgrade";
+    };
+    rollback = {
+      unit = rollbackUnit;
+      start_helper = "${rollbackHelper}";
+      last_run_file = lastRunFile "rollback";
+    };
   });
 
   forcedCommand = "${lib.getExe cfg.package} --config ${serverConfig}";
@@ -310,7 +348,7 @@ in
       unitConfig.X-StopOnRemoval = false;
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
-      serviceConfig.Type = "oneshot";
+      serviceConfig = jobServiceConfig "upgrade";
       environment = config.nix.envVars // config.networking.proxy.envVars // {
         HOME = "/root";
       } // lib.optionalAttrs (cfg.upgrade.sshKeyFile != null) {
@@ -343,7 +381,7 @@ in
       documentation = [ "https://github.com/BWeesy/gubbins" ];
       restartIfChanged = false;
       unitConfig.X-StopOnRemoval = false;
-      serviceConfig.Type = "oneshot";
+      serviceConfig = jobServiceConfig "rollback";
       script = ''
         ${config.nix.package.out}/bin/nix-env --profile /nix/var/nix/profiles/system --rollback
         exec /nix/var/nix/profiles/system/bin/switch-to-configuration switch
