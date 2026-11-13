@@ -1,9 +1,9 @@
 # sound-lab
 
 A browser page for designing short game sound effects and downloading them as
-WAV files. It was built to make the six sounds for BWeesy's Authority Tracker
-(−1 ping, −5 thud, −10 explosion, +1 ding, +5 woing, +10 wooom), but anyone can
-use it: every sound is synthesised from a handful of numbers, so there is no
+WAV files. It was built to make the sounds for BWeesy's Authority Tracker
+(the six ± buttons, a new-game "vrooooom", and a knockout mixed from a crash, a thud, an explosion and laser
+pings), but anyone can use it: every sound is synthesised from a handful of numbers, so there is no
 sample library and nothing to license.
 
 Live at <https://bweesy.github.io/gubbins/sound-lab/> once promoted (dev:
@@ -38,3 +38,15 @@ same samples: what you hear is exactly what you download.
 - **Copy share link** puts all six sounds' settings in the URL, which is the
   easiest way to send a set to someone else to try.
 - Your latest tweaks are kept in the browser's local storage.
+
+## The knockout mix
+
+Below the sounds, the **Knockout** card layers four of them into one event: the crash, the thud and the
+explosion, each at its own offset and level, with laser pings scattered across them at random times, pitches
+and left–right positions. **Re-roll pings** hears a different scatter; the Authority Tracker re-rolls every
+time a player is knocked out.
+
+- **Download mix settings** (and **Download all**) saves `sfx_knockout.json`: the offsets, levels and ping
+  settings the app reads.
+- The phone adds the layers up as they play, with nothing to turn the total down, so the card shows the mix's
+  peak and warns when it would clip. **Overall volume** scales every layer to keep it under full scale.
