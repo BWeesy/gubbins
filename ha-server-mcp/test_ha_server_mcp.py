@@ -52,7 +52,11 @@ RAW_CONFIG = {
         "upgrade.service": "/h/journal-upgrade",
         "rollback.service": "/h/journal-rollback",
     },
-    "upgrade": {"unit": "upgrade.service", "start_helper": "/h/start-upgrade"},
+    "upgrade": {
+        "unit": "upgrade.service",
+        "start_helper": "/h/start-upgrade",
+        "last_run_file": "/var/lib/ha-server-mcp/upgrade.json",
+    },
     "rollback": {"unit": "rollback.service", "start_helper": "/h/start-rollback"},
 }
 
@@ -94,8 +98,18 @@ class FakeRunner:
         return [c[2] for c in self.calls if c[0] == SUDO]
 
 
+LAST_UPGRADE = {
+    "started_at": "2026-11-13T11:38:08+00:00",
+    "finished_at": "2026-11-13T11:38:13+00:00",
+    "result": "success",
+    "exit_code": "exited",
+    "exit_status": "0",
+}
+
+
 def fake_fs(**overrides) -> hsm.Fs:
     files = {
+        "/var/lib/ha-server-mcp/upgrade.json": json.dumps(LAST_UPGRADE),
         "/proc/uptime": "93784.12 100.0\n",
         "/proc/loadavg": "0.50 0.40 0.30 1/200 999\n",
         "/proc/meminfo": "MemTotal: 16384000 kB\nMemFree: 1 kB\n"
@@ -386,13 +400,9 @@ def test_logs_lines_floor(host, runner):
 
 def test_upgrade_starts_fixed_helper(host, runner):
     runner.ok("/h/start-upgrade", "")
-    runner.units["upgrade.service"] = {
-        "ActiveState": "inactive",
-        "ExecMainStartTimestamp": "Thu 2026-11-12 10:00:00 GMT",
-    }
     out = host.system_upgrade()
     assert out["started"] is True
-    assert out["previous_run_started"] == "Thu 2026-11-12 10:00:00 GMT"
+    assert out["previous_run"] == LAST_UPGRADE
     assert out["source"].startswith("git+ssh://")
     assert runner.sudo_helpers() == ["/h/start-upgrade"]
 
@@ -418,22 +428,58 @@ def test_upgrade_helper_failure_is_reported(host, runner):
 
 def test_rollback_starts_fixed_helper(host, runner):
     runner.ok("/h/start-rollback", "")
-    assert host.system_rollback()["started"] is True
+    out = host.system_rollback()
+    assert out["started"] is True
+    assert out["previous_run"] is None  # no last_run_file configured
     assert runner.sudo_helpers() == ["/h/start-rollback"]
 
 
 def test_upgrade_status(host, runner):
+    # An idle oneshot that systemd has unloaded reads back with default
+    # Result/timestamps; those must not be reported as the run's outcome.
     runner.units["upgrade.service"] = {
         "ActiveState": "inactive",
-        "Result": "exit-code",
-        "ExecMainStatus": "1",
+        "SubState": "dead",
+        "Result": "success",
+        "ExecMainStartTimestamp": "",
     }
     runner.ok("/h/journal-upgrade", "building...\nerror: boom\n")
     out = host.upgrade_status(log_lines=1)
-    assert out["upgrade"]["Result"] == "exit-code"
-    assert out["upgrade"]["log"] == ["error: boom"]
+    assert out["upgrade"] == {
+        "unit": "upgrade.service",
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "last_run": LAST_UPGRADE,
+        "log": ["error: boom"],
+    }
+    assert out["rollback"]["last_run"] is None
     assert out["rollback"]["log"].startswith("exit 1")  # helper not answered
     assert out["generations"]["current"] == 42
+
+
+def test_last_run_missing_file_is_never_run(runner):
+    host = hsm.Host(
+        hsm.parse_config(RAW_CONFIG),
+        run=runner,
+        fs=fake_fs(read_text=lambda p: (_ for _ in ()).throw(FileNotFoundError(p))),
+    )
+    assert host.last_run(host.cfg.upgrade) is None
+
+
+def test_last_run_unreadable_or_malformed(runner):
+    for text, needle in (("{oops", "cannot read"), ("[1, 2]", "malformed")):
+        host = hsm.Host(
+            hsm.parse_config(RAW_CONFIG),
+            run=runner,
+            fs=fake_fs(read_text=lambda p, t=text: t),
+        )
+        assert needle in host.last_run(host.cfg.upgrade)["error"]
+
+
+def test_config_rejects_bad_last_run_file():
+    raw = {**RAW_CONFIG, "upgrade": {**RAW_CONFIG["upgrade"], "last_run_file": 3}}
+    with pytest.raises(hsm.ConfigError):
+        hsm.parse_config(raw)
 
 
 def test_subprocess_runner_missing_binary():

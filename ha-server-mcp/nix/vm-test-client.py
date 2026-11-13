@@ -34,6 +34,18 @@ def payload(result):
     return json.loads(result.content[0].text)
 
 
+async def wait_for(session, job, timeout=300):
+    """Poll upgrade_status until `job` has finished, including its
+    ExecStopPost record (written while the unit is deactivating)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        st = payload(await session.call_tool("upgrade_status", {"log_lines": 20}))
+        if st[job].get("ActiveState") not in ("activating", "active", "deactivating"):
+            return st
+        assert time.monotonic() < deadline, f"{job} never finished"
+        await asyncio.sleep(2)
+
+
 async def main():
     params = StdioServerParameters(
         command="ssh",
@@ -74,23 +86,28 @@ async def main():
             started = payload(await s.call_tool("system_upgrade", {}))
             print("system_upgrade:", json.dumps(started))
             assert started["started"] is True, started
+            assert started["previous_run"] is None, started  # first run
 
             # The VM has no network, so the upgrade fails fast — which still
             # proves the unit, its environment and its log path are wired.
-            deadline = time.monotonic() + 300
-            while True:
-                st = payload(await s.call_tool("upgrade_status", {"log_lines": 20}))
-                if st["upgrade"].get("ActiveState") not in ("activating", "active"):
-                    break
-                assert time.monotonic() < deadline, "upgrade never finished"
-                await asyncio.sleep(2)
+            st = await wait_for(s, "upgrade")
             print("upgrade_status:", json.dumps(st))
-            assert st["upgrade"]["Result"] != "success"
+            last = st["upgrade"]["last_run"]
+            # The unit's own record, not systemd's (which forgets a finished
+            # oneshot): a failed fetch must read as a failure.
+            assert last["result"] == "exit-code", last
+            assert last["exit_status"] == "1", last
+            assert last["started_at"] and last["finished_at"], last
             assert st["upgrade"]["log"], st
 
             rb = payload(await s.call_tool("system_rollback", {}))
             print("system_rollback:", json.dumps(rb))
             assert rb["started"] is True, rb
+            st = await wait_for(s, "rollback")
+            print("upgrade_status after rollback:", json.dumps(st))
+            # Whatever the rollback did in a VM with no profile history, it
+            # finished and recorded an outcome.
+            assert st["rollback"]["last_run"]["result"], st
     print("vm-test-client: all checks passed")
 
 
