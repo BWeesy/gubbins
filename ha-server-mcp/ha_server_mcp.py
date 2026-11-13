@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 log = logging.getLogger("ha-server-mcp")
 
@@ -78,6 +78,13 @@ UNIT_PROPERTIES = (
 BUSY_STATES = frozenset({"activating", "active", "deactivating", "reloading"})
 
 GENERATION_LINK = re.compile(r"^system-(\d+)-link$")
+
+# The parts of a NixOS system a switch can't apply to the running host:
+# they only take effect on boot. The same three that nixpkgs'
+# system.autoUpgrade.allowReboot compares. Anything else (units, /etc,
+# packages) is live after a switch, so comparing whole systems would flag a
+# reboot after nearly every deploy.
+BOOT_COMPONENTS = ("kernel", "initrd", "kernel-modules")
 
 
 # --------------------------------------------------------------------------
@@ -253,7 +260,11 @@ class Fs:
     )
     listdir: Callable[[str], list[str]] = field(default=os.listdir)
     readlink: Callable[[str], str] = field(default=os.readlink)
-    realpath: Callable[[str], str] = field(default=os.path.realpath)
+    # strict: a missing path raises instead of resolving to a made-up path,
+    # which would make two missing components compare as different.
+    realpath: Callable[[str], str] = field(
+        default=lambda p: os.path.realpath(p, strict=True)
+    )
     link_mtime: Callable[[str], float] = field(default=lambda p: os.lstat(p).st_mtime)
     # os.statvfs is Linux-only; resolved lazily so the module still imports
     # (and the tests still run) elsewhere.
@@ -467,14 +478,33 @@ class Host:
             "previous": previous,
             "recent": gens[-5:],
         }
-        # A kernel/initrd change only takes effect on reboot; flag it.
-        try:
-            out["reboot_pending"] = self.fs.realpath("/run/current-system") != (
-                self.fs.realpath("/run/booted-system")
-            )
-        except OSError:
-            pass
+        reasons = self.reboot_reasons()
+        if reasons is not None:
+            out["reboot_pending"] = bool(reasons)
+            out["reboot_reasons"] = reasons
         return out
+
+    def reboot_reasons(self) -> list[str] | None:
+        """Which BOOT_COMPONENTS differ between the booted and the current
+        system, or None if that can't be told (no /run/booted-system)."""
+
+        def resolve(path: str) -> str | None:
+            try:
+                return self.fs.realpath(path)
+            except FileNotFoundError:
+                return None  # absent: equal to another absent one
+
+        try:
+            self.fs.realpath("/run/booted-system")
+            self.fs.realpath("/run/current-system")
+        except OSError:
+            return None
+        return [
+            part
+            for part in BOOT_COMPONENTS
+            if resolve(f"/run/booted-system/{part}")
+            != resolve(f"/run/current-system/{part}")
+        ]
 
     # -- tools -------------------------------------------------------------
 

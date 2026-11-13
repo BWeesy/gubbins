@@ -71,6 +71,10 @@ async def main():
             assert health["uptime"]["uptime_seconds"] >= 0
             assert isinstance(health["failed_units"], list), health["failed_units"]
             assert health["home_assistant_vm"] == {"configured": False}
+            # Freshly booted, nothing switched: kernel, initrd and modules
+            # resolve identically, so no reboot is due.
+            assert health["generations"].get("reboot_pending") is False, health
+            assert health["generations"]["reboot_reasons"] == [], health
 
             gb = payload(await s.call_tool("glowbridge_status", {}))
             print("glowbridge_status:", json.dumps(gb))
