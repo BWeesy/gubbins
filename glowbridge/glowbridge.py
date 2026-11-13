@@ -55,7 +55,7 @@ from typing import Any
 
 import requests
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 GLOWMARKT_BASE_URL = "https://api.glowmarkt.com/api/v0-1"
 # Application ID published by Hildebrand for the Bright app. Overridable in
@@ -132,6 +132,10 @@ class GlowmarktConfig:
     password: str = ""
     application_id: str = DEFAULT_APPLICATION_ID
     resources: tuple[str, ...] = ()
+    # One-shot re-seeds of a resource the state file lost (see CONFIG.md):
+    # raw tables, validated in _validate_semantics, applied by
+    # Bridge.apply_restores.
+    restore: tuple[dict, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -187,6 +191,7 @@ _CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "password": str,
         "application_id": str,
         "resources": list,
+        "restore": list,
     },
     "schedule": {
         "interval": int,
@@ -290,6 +295,7 @@ def _validate_semantics(cfg: Config) -> list[str]:
     for rid in g.resources:
         if not isinstance(rid, str) or not rid:
             errors.append("glowmarkt.resources: entries must be non-empty strings")
+    errors.extend(_validate_restores(g.restore))
     lvl = cfg.logging.level.lower()
     if lvl not in ("debug", "info", "warning", "error"):
         errors.append("logging.level: must be debug, info, warning or error")
@@ -298,9 +304,71 @@ def _validate_semantics(cfg: Config) -> list[str]:
     return errors
 
 
+_RESTORE_REQUIRED = {"resource", "classifier", "settled_through", "cumulative_wh"}
+_RESTORE_OPTIONAL = {"name"}
+
+
+def restore_settled_through(value: Any) -> datetime:
+    """A restore entry's frontier: an aware, hour-aligned instant. TOML
+    gives a datetime for a bare timestamp and a str for a quoted one (the
+    NixOS module's renderer quotes), so both are accepted."""
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        dt = datetime.fromisoformat(value)
+    else:
+        raise ValueError("must be an ISO 8601 timestamp")
+    if dt.tzinfo is None:
+        raise ValueError("must include a timezone offset (e.g. Z)")
+    dt = dt.astimezone(UTC)
+    if dt != floor_hour(dt):
+        raise ValueError("must be on an hour boundary")
+    return dt
+
+
+def _validate_restores(entries: tuple) -> list[str]:
+    errors = []
+    seen: set[str] = set()
+    for i, entry in enumerate(entries):
+        where = f"glowmarkt.restore[{i}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{where}: expected a table")
+            continue
+        missing = _RESTORE_REQUIRED - entry.keys()
+        unknown = entry.keys() - _RESTORE_REQUIRED - _RESTORE_OPTIONAL
+        if missing:
+            errors.append(f"{where}: missing {', '.join(sorted(missing))}")
+        if unknown:
+            errors.append(f"{where}: unknown key(s) {', '.join(sorted(unknown))}")
+        if missing or unknown:
+            continue
+        rid = entry["resource"]
+        if not isinstance(rid, str) or not rid:
+            errors.append(f"{where}.resource: must be a non-empty string")
+        elif rid in seen:
+            errors.append(f"{where}.resource: {rid} is restored twice")
+        else:
+            seen.add(rid)
+        if entry["classifier"] not in BRIDGED_CLASSIFIERS:
+            errors.append(
+                f"{where}.classifier: must be one of"
+                f" {', '.join(sorted(BRIDGED_CLASSIFIERS))}"
+            )
+        cum = entry["cumulative_wh"]
+        if not isinstance(cum, int) or isinstance(cum, bool) or cum < 0:
+            errors.append(f"{where}.cumulative_wh: must be a non-negative integer")
+        try:
+            restore_settled_through(entry["settled_through"])
+        except ValueError as exc:
+            errors.append(f"{where}.settled_through: {exc}")
+        if not isinstance(entry.get("name", ""), str):
+            errors.append(f"{where}.name: must be a string")
+    return errors
+
+
 def _build_section(cls, raw: dict):
     kwargs = {
-        name: (tuple(value) if name == "resources" else value)
+        name: (tuple(value) if name in ("resources", "restore") else value)
         for name, value in raw.items()
     }
     return cls(**kwargs)
@@ -417,6 +485,9 @@ class StateFile:
             "schema": STATE_SCHEMA,
             "auth": {"token": "", "obtained_at": "", "last_attempt_at": ""},
             "resources": {},
+            # Keys of glowmarkt.restore entries already applied, so each
+            # restore runs exactly once even if left in the config.
+            "restores_applied": [],
         }
 
     def load(self) -> None:
@@ -507,6 +578,29 @@ class StateFile:
 
     def drop_resource(self, resource_id: str) -> None:
         self.data["resources"].pop(resource_id, None)
+
+    def restore_resource(
+        self,
+        resource_id: str,
+        classifier: str,
+        name: str,
+        settled_through: datetime,
+        cumulative_wh_at_settled: int,
+    ) -> None:
+        """(Re)create a resource entry at a known frontier and baseline,
+        instead of upsert_resource's fresh seed at zero. Used only by
+        glowmarkt.restore."""
+        self.data["resources"][resource_id] = {
+            "classifier": classifier,
+            "name": name,
+            "settled_through": settled_through.isoformat(),
+            "cumulative_wh_at_settled": int(cumulative_wh_at_settled),
+            "data_complete_to": "",
+            "last_catchup_at": "",
+        }
+
+    def restores_applied(self) -> list[str]:
+        return self.data.setdefault("restores_applied", [])
 
     def settled_through(self, resource_id: str) -> datetime:
         return _parse_iso(self.data["resources"][resource_id]["settled_through"])
@@ -1119,20 +1213,90 @@ class Bridge:
 
     def rediscover(self, missing_id: str, now: datetime) -> None:
         """A cached resource 404ed. Supplier switches and meter exchanges
-        mint new resource IDs, so drop it and re-run discovery. A pinned
-        resource that 404s is a hard error instead: the user asserted the
-        ID, so silently substituting a different one would be wrong."""
+        mint new resource IDs, so re-run discovery, and drop the old ID only
+        if a *successful* discovery no longer lists it.
+
+        The 404 alone is not trusted. The Glowmarkt API has returned a
+        spurious 404 in the middle of an outage; dropping on it, before a
+        discovery that then also failed, lost a live meter for weeks
+        (discovery never re-runs while any resource is cached). So:
+
+          * discovery fails  -> keep the resource; the error fails this
+            attempt and the retry or next cycle tries again;
+          * still listed     -> a transient 404; keep it;
+          * no longer listed -> drop it. A replacement found by the same
+            discovery is already cached and is polled from the next cycle.
+
+        A pinned resource that 404s is a hard error instead: the user
+        asserted the ID, so silently substituting a different one would be
+        wrong."""
         if self.cfg.glowmarkt.resources:
             raise CycleError(
                 f"pinned resource {missing_id} does not exist (HTTP 404);"
                 " fix glowmarkt.resources in config"
             )
         log.warning(
-            "resource %s no longer exists; dropping and rediscovering",
+            "resource %s returned 404; re-running discovery before dropping it",
+            missing_id,
+        )
+        found = self.discover(now)  # raises on failure: the resource is kept
+        if missing_id in found:
+            log.warning(
+                "resource %s is still listed by discovery; treating the 404"
+                " as transient and keeping it",
+                missing_id,
+            )
+            return
+        log.warning(
+            "resource %s is no longer listed by discovery; dropping it",
             missing_id,
         )
         self.state.drop_resource(missing_id)
-        self.discover(now)
+        self.state.save()
+
+    def apply_restores(self) -> None:
+        """Apply each glowmarkt.restore entry once.
+
+        Re-creates a resource the state file lost at a frontier and
+        cumulative baseline read from Home Assistant, so the next fetch
+        starts there and the cumulative sum continues exactly where the
+        existing history left off (a fresh discovery would instead seed at
+        zero and put a step in the statistic). An entry is skipped, and
+        still marked applied, if the resource is already tracked:
+        overwriting a live frontier would be the very damage this avoids.
+        """
+        applied = self.state.restores_applied()
+        for entry in self.cfg.glowmarkt.restore:
+            rid = entry["resource"]
+            settled = restore_settled_through(entry["settled_through"])
+            key = f"{rid}@{settled.isoformat()}"
+            if key in applied:
+                continue
+            if self.state.resource(rid) is not None:
+                log.warning(
+                    "glowmarkt.restore for %s ignored: the resource is already"
+                    " tracked; remove the entry from the config",
+                    rid,
+                )
+            else:
+                classifier = entry["classifier"]
+                self.state.restore_resource(
+                    rid,
+                    classifier,
+                    entry.get("name") or BRIDGED_CLASSIFIERS[classifier],
+                    settled,
+                    entry["cumulative_wh"],
+                )
+                log.warning(
+                    "restored resource %s (%s) from config: frontier %s,"
+                    " cumulative %.3f kWh; re-fetching from there",
+                    rid,
+                    classifier,
+                    settled.isoformat(),
+                    entry["cumulative_wh"] / 1000,
+                )
+            applied.append(key)
+            self.state.save()
 
     # -- one cycle -------------------------------------------------------
 
@@ -1147,6 +1311,7 @@ class Bridge:
         """
         self.last_attempt = now
         self.ensure_token(now)
+        self.apply_restores()
         resources = self.resolve_resources(now)
 
         imported_hours = 0

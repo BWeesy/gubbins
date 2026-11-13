@@ -554,6 +554,7 @@ class FakeGlowClient:
         self.auth_calls = 0
         self.fail_auth = False
         self.fail_readings: list[Exception] = []
+        self.fail_resources: list[Exception] = []
         self.catchups: list[str] = []
 
     def set_token(self, token):
@@ -567,6 +568,8 @@ class FakeGlowClient:
         return self.token
 
     def get_resources(self):
+        if self.fail_resources:
+            raise self.fail_resources.pop(0)
         return self.resources
 
     def catchup(self, resource_id):
@@ -829,6 +832,182 @@ class TestRetryOrchestration:
         ok = gb.run_cycle_with_retries(bridge, bridge.cfg, sleeper=sleeps.append)
         assert ok
         assert sleeps == [120]
+
+
+# --------------------------------------------------------------------------
+# Rediscovery after a 404, and glowmarkt.restore
+# --------------------------------------------------------------------------
+
+GAS = {
+    "resourceId": "res-gas",
+    "classifier": "gas.consumption",
+    "name": "gas consumption",
+}
+
+
+class TestRediscovery:
+    WM = datetime(2026, 7, 20, 0, 0, tzinfo=UTC)
+
+    def _bridge(self, tmp_path, resources):
+        client = FakeGlowClient(
+            readings_by_resource={
+                "res-elec": make_readings(self.WM, [0.5, 0.5, 0.5, 0.5]),
+                "res-gas": make_readings(self.WM, [1.0, 1.0, 1.0, 1.0]),
+            },
+            resources=resources,
+        )
+        bridge, state = make_bridge(tmp_path, client, FakeImporter())
+        state.upsert_resource("res-elec", "electricity.consumption", "e", self.WM)
+        state.upsert_resource("res-gas", "gas.consumption", "g", self.WM)
+        state.commit("res-elec", self.WM, 5000, None)  # a real baseline
+        return bridge, state, client
+
+    def test_404_but_still_listed_keeps_the_resource(self, tmp_path):
+        bridge, state, client = self._bridge(tmp_path, [ELEC, GAS])
+        client.fail_readings = [gb.ResourceMissing("res-elec")]
+        bridge.run_cycle(self.WM + 4 * HOUR)
+        assert sorted(state.resource_ids()) == ["res-elec", "res-gas"]
+        # Kept as-is, not dropped and re-seeded at zero.
+        assert state.cumulative_at_settled("res-elec") == 5000
+
+    def test_404_and_failed_discovery_keeps_the_resource(self, tmp_path):
+        bridge, state, client = self._bridge(tmp_path, [ELEC, GAS])
+        client.fail_readings = [gb.ResourceMissing("res-elec")]
+        client.fail_resources = [gb.CycleError("Remote end closed connection")]
+        with pytest.raises(gb.CycleError):
+            bridge.run_cycle(self.WM + 4 * HOUR)
+        assert sorted(state.resource_ids()) == ["res-elec", "res-gas"]
+
+    def test_outage_replay_meter_survives_to_next_cycle(self, tmp_path):
+        # 21 Oct 2026: a 404 mid-outage, then discovery failing too. The
+        # old code dropped the meter first and never rediscovered it.
+        bridge, state, client = self._bridge(tmp_path, [ELEC, GAS])
+        client.fail_readings = [gb.ResourceMissing("res-elec")]
+        client.fail_resources = [gb.CycleError("RemoteDisconnected")]
+        with pytest.raises(gb.CycleError):
+            bridge.run_cycle(self.WM + 4 * HOUR)
+        importer = FakeImporter()
+        bridge.importer = importer
+        bridge.run_cycle(self.WM + 4 * HOUR)
+        assert {sid for sid, _, _ in importer.imports} == {
+            "glowbridge:electricity_consumption",
+            "glowbridge:gas_consumption",
+        }
+
+    def test_404_and_not_listed_drops_and_adopts_replacement(self, tmp_path):
+        replacement = {**ELEC, "resourceId": "res-elec-new"}
+        bridge, state, client = self._bridge(tmp_path, [replacement, GAS])
+        client.fail_readings = [gb.ResourceMissing("res-elec")]
+        bridge.run_cycle(self.WM + 4 * HOUR)
+        assert sorted(state.resource_ids()) == ["res-elec-new", "res-gas"]
+
+
+RESTORE_TOML = MINIMAL_CONFIG + """
+[[glowmarkt.restore]]
+resource = "res-elec"
+classifier = "electricity.consumption"
+settled_through = "2026-07-20T00:00:00Z"
+cumulative_wh = 2117590
+"""
+
+
+class TestRestore:
+    WM = datetime(2026, 7, 20, 0, 0, tzinfo=UTC)
+
+    def test_config_accepts_quoted_and_bare_timestamps(self, tmp_path):
+        cfg = load_cfg(tmp_path, RESTORE_TOML)
+        assert cfg.glowmarkt.restore[0]["cumulative_wh"] == 2117590
+        bare = RESTORE_TOML.replace(
+            'settled_through = "2026-07-20T00:00:00Z"',
+            "settled_through = 2026-07-20T00:00:00Z",
+        )
+        cfg = load_cfg(tmp_path, bare)
+        assert gb.restore_settled_through(
+            cfg.glowmarkt.restore[0]["settled_through"]
+        ) == self.WM
+
+    @pytest.mark.parametrize(
+        "old, new, error",
+        [
+            ('cumulative_wh = 2117590', 'cumulative_wh = 2117.59', "cumulative_wh"),
+            ('cumulative_wh = 2117590', 'cumulative_wh = -1', "cumulative_wh"),
+            ('"electricity.consumption"', '"electricity.consumption.cost"', "classifier"),
+            ('"2026-07-20T00:00:00Z"', '"2026-07-20T00:30:00Z"', "hour boundary"),
+            ('"2026-07-20T00:00:00Z"', '"2026-07-20T00:00:00"', "timezone"),
+            ('cumulative_wh = 2117590', 'cumulative_wh = 1\nextra = 1', "unknown key"),
+            ('cumulative_wh = 2117590\n', '', "missing cumulative_wh"),
+        ],
+    )
+    def test_config_rejects_bad_entries(self, tmp_path, old, new, error):
+        text = RESTORE_TOML.replace(old, new)
+        assert text != RESTORE_TOML
+        with pytest.raises(gb.ConfigError, match=error):
+            load_cfg(tmp_path, text)
+
+    def test_config_rejects_duplicate_resource(self, tmp_path):
+        text = RESTORE_TOML + RESTORE_TOML[len(MINIMAL_CONFIG):]
+        with pytest.raises(gb.ConfigError, match="restored twice"):
+            load_cfg(tmp_path, text)
+
+    def _bridge(self, tmp_path, cached=()):
+        client = FakeGlowClient(
+            readings_by_resource={
+                "res-elec": make_readings(self.WM, [0.5, 0.25, 0.25, 0.5]),
+                "res-gas": make_readings(self.WM, [1.0, 1.0, 1.0, 1.0]),
+            },
+            resources=[ELEC, GAS],
+        )
+        importer = FakeImporter()
+        bridge, state = make_bridge(tmp_path, client, importer)
+        object.__setattr__(
+            bridge.cfg,
+            "glowmarkt",
+            gb.GlowmarktConfig(
+                username="u",
+                password="p",
+                restore=(
+                    {
+                        "resource": "res-elec",
+                        "classifier": "electricity.consumption",
+                        "settled_through": self.WM.isoformat(),
+                        "cumulative_wh": 2117590,
+                    },
+                ),
+            ),
+        )
+        for rid in cached:
+            classifier = "gas.consumption" if rid == "res-gas" else "electricity.consumption"
+            state.upsert_resource(rid, classifier, rid, self.WM)
+        return bridge, state, importer
+
+    def test_restore_continues_the_existing_sum(self, tmp_path):
+        bridge, state, importer = self._bridge(tmp_path, cached=["res-gas"])
+        bridge.run_cycle(self.WM + 4 * HOUR)
+        rows = {sid: r for sid, _, r in importer.imports}[
+            "glowbridge:electricity_consumption"
+        ]
+        # The first restored hour is the baseline plus that hour, not 0.5.
+        assert rows[0] == {"start": self.WM.isoformat(), "sum": 2118.09}
+        assert rows[-1]["sum"] == 2119.09
+        assert state.restores_applied() == [f"res-elec@{self.WM.isoformat()}"]
+        # The restored entry is persisted, so it survives a restart.
+        reloaded = gb.StateFile(tmp_path)
+        reloaded.load()
+        assert "res-elec" in reloaded.resource_ids()
+
+    def test_restore_is_one_shot(self, tmp_path):
+        bridge, state, _ = self._bridge(tmp_path, cached=["res-gas"])
+        bridge.run_cycle(self.WM + 4 * HOUR)
+        state.drop_resource("res-elec")
+        bridge.apply_restores()
+        assert state.resource("res-elec") is None  # not re-applied
+
+    def test_restore_never_overwrites_a_tracked_resource(self, tmp_path):
+        bridge, state, _ = self._bridge(tmp_path, cached=["res-gas", "res-elec"])
+        before = dict(state.resource("res-elec"))
+        bridge.apply_restores()
+        assert state.resource("res-elec") == before
+        assert state.restores_applied() == [f"res-elec@{self.WM.isoformat()}"]
 
 
 if __name__ == "__main__":

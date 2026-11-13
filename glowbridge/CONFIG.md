@@ -48,8 +48,12 @@ Optional resource pin. Semantics:
   `gas.consumption` (cost resources are never bridged), and caches them
   in the state file. Subsequent runs use the cache. If a cached resource
   later returns HTTP 404 — supplier switches and meter exchanges mint new
-  resource IDs — it is dropped and discovery re-runs automatically; the
-  replacement is polled from the next cycle.
+  resource IDs — discovery re-runs. The old ID is dropped only if that
+  discovery succeeds and no longer lists it, and any replacement is polled
+  from the next cycle. If discovery fails, or still lists the ID, the 404 is
+  treated as transient and the resource is kept. (Before 1.1.0 a 404 during
+  an API outage could drop a live meter permanently; see `restore` below
+  to recover one.)
 - **Set:** discovery is skipped entirely. A pinned resource that returns
   404 is a fatal cycle error, deliberately: the ID was asserted by the
   user, and silently substituting a discovered one would be wrong.
@@ -57,6 +61,40 @@ Optional resource pin. Semantics:
 Entries must be non-empty strings. A pinned resource's classifier is never
 looked up, so its statistic is named after the resource id
 (`glowbridge:<resource_id>`) rather than the classifier.
+
+### `restore` — array of tables, default `[]`
+A one-shot recovery for a resource the state file lost, such as a meter
+dropped by the pre-1.1.0 404 bug. It re-creates the resource at a known
+frontier and cumulative baseline, so the bridge re-fetches from that hour
+and the statistic continues from the existing history without a step.
+Adding the resource by fresh discovery instead would seed its running
+total at zero, and the first re-imported hour would show as a huge
+negative (or positive) bar.
+
+```toml
+[[glowmarkt.restore]]
+resource = "30f3e3e9-…"              # the resource ID, e.g. from an old log line
+classifier = "electricity.consumption"
+settled_through = "2026-10-14T00:00:00Z"
+cumulative_wh = 2049371
+# name = "electricity consumption"   # optional; defaults from the classifier
+```
+
+- `settled_through` must be an hour boundary with a timezone.
+- `cumulative_wh` is the running total of **all hours before**
+  `settled_through`, in integer watt-hours. In Home Assistant that is the
+  `sum` of the statistic's row for the hour *before* `settled_through`
+  (start = `settled_through` − 1 h), × 1000. Pick a `settled_through` where
+  that row exists. Anything from there on is re-fetched from the API and
+  re-imported, so it can be any point before the data stopped.
+- Each entry applies **once**. The state file records it and later runs
+  ignore it, so a leftover entry does nothing. Remove it at your
+  convenience.
+- An entry for a resource that is already tracked is ignored with a
+  warning, never applied: overwriting a live frontier would corrupt the
+  sums.
+- `classifier` must be `electricity.consumption` or `gas.consumption`, and
+  each resource may appear once.
 
 ## `[homeassistant]`
 
