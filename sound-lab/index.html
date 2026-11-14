@@ -60,6 +60,8 @@
   .seg button.on{background:var(--cyanDim);border-color:var(--cyan);color:#eafffb}
   .chk{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);cursor:pointer;user-select:none}
   .chk input{accent-color:var(--cyan)}
+  .grid.ko{margin-top:14px}
+  .note{font-size:12.5px;color:var(--muted);margin:8px 0 0}
   footer{margin-top:28px;font-size:12.5px;color:var(--muted)}
   footer a{color:var(--muted)} footer a:hover{color:var(--cyan)}
   @media (max-width:420px){ .grid{grid-template-columns:1fr} .row{grid-template-columns:92px 1fr 58px} }
@@ -69,7 +71,8 @@
 <main>
   <h1>Sound Lab</h1>
   <p class="sub">Design short game sound effects and download them as WAV files. Every sound is synthesised from the
-    settings below, so there is nothing to license: use the results anywhere. Tap a waveform or press 1–6 to play.</p>
+    settings below, so there is nothing to license: use the results anywhere. Tap a waveform or press 1–9 and 0 to play,
+    or K for the knockout.</p>
 
   <div class="toolbar">
     <button class="primary" id="playAll">Play all</button>
@@ -83,6 +86,7 @@
   <div class="status" id="status" role="status" aria-live="polite"></div>
 
   <div class="grid" id="grid"></div>
+  <div class="grid ko" id="knockout"></div>
 
   <footer>Part of <a href="../">gubbins</a> · Source on <a href="https://github.com/BWeesy/gubbins/tree/main/sound-lab">GitHub</a></footer>
 </main>
@@ -123,7 +127,86 @@ const PRESETS = [
     p: { length: 540, attack: 70, curve: 1.6, gain: 0.9, wave: 'saw', f0: 110, f1: 880, vibRate: 6, vibDepth: 0.2,
          unison: 3, detune: 18, subLevel: 0.4, subF0: 55, subF1: 110, subDecay: 1,
          noiseLevel: 0.12, cut0: 700, cut1: 5000, noiseDecay: 0.8 } },
+  // A new game: a long, rising engine "vrooooom".
+  { id: 'gameStart', badge: '▶', name: 'Vrooooom', file: 'sfx_game_start',
+    p: { length: 1400, attack: 260, curve: 0.8, gain: 0.9, wave: 'saw', f0: 55, f1: 520, vibRate: 5, vibDepth: 0.15,
+         unison: 3, detune: 22, subLevel: 0.55, subF0: 40, subF1: 95, subDecay: 0.8,
+         noiseLevel: 0.18, cut0: 400, cut1: 4000, noiseDecay: 0.6 } },
+  // The layers of a knockout (a player falling to zero), mixed together below in "Knockout".
+  { id: 'koCrash', badge: 'KO', name: 'Crash', file: 'sfx_ko_crash',
+    p: { length: 700, attack: 1, curve: 2.2, gain: 0.9, toneLevel: 0, seed: 13,
+         subLevel: 0.2, subF0: 80, subF1: 40, subDecay: 1.5, noiseLevel: 1, cut0: 9000, cut1: 1200, noiseDecay: 1.2 } },
+  { id: 'koThud', badge: 'KO', name: 'Thud', file: 'sfx_ko_thud',
+    p: { length: 320, attack: 1, curve: 2.6, gain: 1, toneLevel: 0.35, wave: 'triangle', f0: 160, f1: 50,
+         subLevel: 1, subF0: 110, subF1: 35, subDecay: 1.1, noiseLevel: 0.35, cut0: 2500, cut1: 150, noiseDecay: 4 } },
+  { id: 'koBoom', badge: 'KO', name: 'Explosion', file: 'sfx_ko_boom',
+    p: { length: 1300, attack: 3, curve: 1.5, gain: 1, toneLevel: 0, seed: 21,
+         subLevel: 0.9, subF0: 80, subF1: 24, subDecay: 1.2, noiseLevel: 1, cut0: 5000, cut1: 90, noiseDecay: 0.9 } },
+  { id: 'koPing', badge: 'KO', name: 'Laser ping', file: 'sfx_ko_ping',
+    p: { length: 140, attack: 1, curve: 2.5, gain: 0.6, wave: 'square', f0: 2400, f1: 700 } },
 ];
+
+// ---------- Knockout mix ----------
+// A knockout plays the crash, thud and explosion together, each at its own offset and level, with laser
+// pings scattered across them. The pings are random: when each starts, its pitch, and where it sits left
+// to right. The app makes a fresh roll every time a player is knocked out, so no two sound the same;
+// here, "Re-roll pings" hears another one. Times are in ms from the knockout; pitch spread is ± semitones.
+const KO_DEFAULTS = {
+  crashAt: 0, crashGain: 0.8, thudAt: 30, thudGain: 1, boomAt: 90, boomGain: 0.9,
+  pings: 7, pingFrom: 40, pingTo: 1100, pingSpread: 7, pingGain: 0.45, pingPan: 0.8, seed: 3,
+  // Scales every layer. The phone adds the layers up as they play, with nothing to turn the total down, so
+  // this keeps the loudest moment under full scale (the card shows the peak, and warns if it would clip).
+  volume: 0.42,
+};
+const KO_LAYERS = [['koCrash', 'crashAt', 'crashGain'], ['koThud', 'thudAt', 'thudGain'], ['koBoom', 'boomAt', 'boomGain']];
+
+// What plays when, as the app does it: [{ id, at (ms), gain, rate (playback speed, so pitch), pan (−1..1) }].
+function planKnockout(mix, rand) {
+  const m = { ...KO_DEFAULTS, ...mix };
+  const cues = KO_LAYERS.map(([id, at, gain]) => ({ id, at: m[at], gain: m[gain] * m.volume, rate: 1, pan: 0 }));
+  for (let i = 0; i < Math.round(m.pings); i++) {
+    cues.push({
+      id: 'koPing',
+      at: m.pingFrom + rand() * Math.max(0, m.pingTo - m.pingFrom),
+      gain: m.pingGain * m.volume,
+      rate: Math.pow(2, (rand() * 2 - 1) * m.pingSpread / 12),
+      pan: (rand() * 2 - 1) * m.pingPan,
+    });
+  }
+  return cues;
+}
+
+// Equal-power panning that leaves a centred sound at full level in both ears, as SoundPool's volumes do.
+const panGains = pan => {
+  const th = (pan + 1) * Math.PI / 4;
+  return [Math.min(1, Math.SQRT2 * Math.cos(th)), Math.min(1, Math.SQRT2 * Math.sin(th))];
+};
+
+// The knockout as stereo samples, for listening here: each layer rendered, sped up or slowed down by its
+// rate (which is how the app changes a ping's pitch), and added in at its offset. Nothing is normalised:
+// the phone just adds the layers up, so this does too, and clips anything past full scale the same way.
+function renderKnockout(mix, sr) {
+  const cues = planKnockout(mix, mulberry32(({ ...KO_DEFAULTS, ...mix }).seed * 2654435761));
+  const layers = {};
+  for (const c of cues) if (!layers[c.id]) layers[c.id] = render(sounds.find(s => s.id === c.id).p, sr);
+  const n = Math.ceil(Math.max(...cues.map(c => c.at / 1000 * sr + layers[c.id].length / c.rate))) + 1;
+  const L = new Float32Array(n), R = new Float32Array(n);
+  for (const c of cues) {
+    const src = layers[c.id], start = Math.round(c.at / 1000 * sr), [gl, gr] = panGains(c.pan);
+    for (let i = 0; start + i < n; i++) {
+      const x = i * c.rate, j = Math.floor(x);
+      if (j + 1 >= src.length) break;
+      const s = (src[j] + (src[j + 1] - src[j]) * (x - j)) * c.gain;
+      L[start + i] += s * gl; R[start + i] += s * gr;
+    }
+  }
+  let peak = 0;
+  for (let i = 0; i < n; i++) {
+    peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i]));
+    L[i] = Math.max(-1, Math.min(1, L[i])); R[i] = Math.max(-1, Math.min(1, R[i]));
+  }
+  return [L, R, peak];
+}
 
 function mulberry32(a) {
   return function () {
@@ -237,6 +320,17 @@ function play(sound) {
   src.connect(ac.destination);
   src.start();
 }
+function playKnockout() {
+  const ac = audio();
+  const [L, R] = renderKnockout(mix, ac.sampleRate);
+  const buf = ac.createBuffer(2, L.length, ac.sampleRate);
+  buf.getChannelData(0).set(L);
+  buf.getChannelData(1).set(R);
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  src.connect(ac.destination);
+  src.start();
+}
 
 // ---------- Controls ----------
 // [key, label, min, max, step, unit, log scale]
@@ -276,15 +370,21 @@ const el = (tag, attrs = {}, ...kids) => {
   return e;
 };
 
+// Healing sounds and the game start are drawn green; damage and the knockout red.
+const upbeat = sound => /^[+▶]/.test(sound.badge);
+
 function drawWave(canvas, sound) {
+  drawSamples(canvas, render(sound.p, 22050), upbeat(sound) ? '#5be08a' : '#ff6b6b');
+}
+
+function drawSamples(canvas, data, colour) {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr;
   if (!w) return;
   canvas.width = w; canvas.height = h;
   const g = canvas.getContext('2d');
-  const data = render(sound.p, 22050);
   g.clearRect(0, 0, w, h);
-  g.fillStyle = sound.badge.startsWith('+') ? '#5be08a' : '#ff6b6b';
+  g.fillStyle = colour;
   const per = data.length / w, mid = h / 2;
   for (let x = 0; x < w; x++) {
     let lo = 1, hi = -1;
@@ -300,6 +400,8 @@ function buildCard(sound) {
   const refresh = () => {
     drawWave(canvas, sound);
     lengthMeta.textContent = Math.round({ ...DEFAULTS, ...sound.p }.length) + ' ms';
+    // The knockout is made of these, so it changes too.
+    if (sound.id.startsWith('ko')) refreshKnockout();
     save();
   };
   canvas.addEventListener('click', () => play(sound));
@@ -346,7 +448,7 @@ function buildCard(sound) {
   const preset = PRESETS.find(x => x.id === sound.id);
   const card = el('section', { class: 'card', 'aria-label': sound.name },
     el('div', { class: 'head' },
-      el('span', { class: 'badge ' + (sound.badge.startsWith('+') ? 'plus' : 'minus') }, sound.badge),
+      el('span', { class: 'badge ' + (upbeat(sound) ? 'plus' : 'minus') }, sound.badge),
       nameInput,
       el('button', { class: 'play primary', 'aria-label': 'Play', title: 'Play', onclick: () => play(sound) }, '▶')),
     canvas,
@@ -375,15 +477,92 @@ function vary(sound) {
 }
 
 function download(sound) {
-  const a = el('a', { href: URL.createObjectURL(wavBlob(render(sound.p, EXPORT_RATE), EXPORT_RATE)), download: sound.file + '.wav' });
+  saveFile(wavBlob(render(sound.p, EXPORT_RATE), EXPORT_RATE), sound.file + '.wav');
+}
+
+function saveFile(blob, name) {
+  const a = el('a', { href: URL.createObjectURL(blob), download: name });
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
+// The mix's settings on their own, for the app's res/raw/ folder beside the four layers' WAVs.
+const knockoutBlob = () => new Blob([JSON.stringify({ ...KO_DEFAULTS, ...mix }, null, 2)], { type: 'application/json' });
+
+// [key, label, min, max, step, unit]
+const KO_GROUPS = [
+  { name: 'Layers', fields: [
+    ['crashAt', 'Crash at', 0, 800, 5, 'ms'], ['crashGain', 'Crash level', 0, 1, 0.01, ''],
+    ['thudAt', 'Thud at', 0, 800, 5, 'ms'], ['thudGain', 'Thud level', 0, 1, 0.01, ''],
+    ['boomAt', 'Explosion at', 0, 800, 5, 'ms'], ['boomGain', 'Explosion level', 0, 1, 0.01, ''],
+    ['volume', 'Overall volume', 0.05, 1, 0.01, ''] ] },
+  { name: 'Laser pings', fields: [
+    ['pings', 'How many', 0, 16, 1, ''], ['pingFrom', 'From', 0, 2000, 10, 'ms'], ['pingTo', 'To', 0, 2000, 10, 'ms'],
+    ['pingSpread', 'Pitch spread', 0, 12, 0.5, 'st'], ['pingGain', 'Level', 0, 1, 0.01, ''],
+    ['pingPan', 'Left–right spread', 0, 1, 0.01, ''], ['seed', 'Roll', 1, 999, 1, ''] ] },
+];
+
+let refreshKnockout = () => {};
+
+function buildKnockout() {
+  const canvas = el('canvas', { class: 'wave', role: 'button', 'aria-label': 'Play the knockout', tabindex: '0' });
+  const lengthMeta = el('span');
+  const controls = [];
+  const sync = () => controls.forEach(f => f());
+  refreshKnockout = () => {
+    const [L, R, peak] = renderKnockout(mix, 22050);
+    drawSamples(canvas, L.map((x, i) => (x + R[i]) / 2), '#ff6b6b');
+    lengthMeta.textContent = Math.round(L.length / 22.05) + ' ms, peak ' + peak.toFixed(2) +
+      (peak > 1 ? ': clips, so turn the overall volume down' : '');
+  };
+  const changed = () => { refreshKnockout(); save(); };
+  canvas.addEventListener('click', playKnockout);
+  canvas.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playKnockout(); } });
+
+  const details = el('details', { open: '' }, el('summary', {}, 'Mix'));
+  for (const grp of KO_GROUPS) {
+    const box = el('div', { class: 'group' }, el('div', { class: 'glabel' }, grp.name));
+    for (const [key, label, min, max, step, unit] of grp.fields) {
+      const id = 'ko-' + key;
+      const input = el('input', { type: 'range', id, min, max, step });
+      const val = el('span', { class: 'val' });
+      input.addEventListener('input', () => { mix[key] = +input.value; val.textContent = fmt(mix[key], step, unit); changed(); });
+      input.addEventListener('change', () => { if (autoplay.checked) playKnockout(); });
+      controls.push(() => { input.value = mix[key]; val.textContent = fmt(mix[key], step, unit); });
+      box.append(el('div', { class: 'row' }, el('label', { for: id }, label), input, val));
+    }
+    details.append(box);
+  }
+
+  const card = el('section', { class: 'card', 'aria-label': 'Knockout' },
+    el('div', { class: 'head' },
+      el('span', { class: 'badge minus' }, 'KO'),
+      el('span', { class: 'name' }, 'Knockout'),
+      el('button', { class: 'play primary', 'aria-label': 'Play the knockout', title: 'Play', onclick: playKnockout }, '▶')),
+    canvas,
+    el('div', { class: 'meta' }, el('code', {}, 'sfx_knockout.json'), lengthMeta),
+    el('p', { class: 'note' }, 'When a player falls to zero: the crash, thud and explosion above, with laser pings scattered ' +
+      'across them. The app re-rolls the pings every time, so each knockout sounds a little different.'),
+    el('div', { class: 'actions' },
+      el('button', { onclick: () => { mix.seed = 1 + Math.floor(Math.random() * 999); sync(); changed(); playKnockout(); } }, 'Re-roll pings'),
+      el('button', { onclick: () => saveFile(knockoutBlob(), 'sfx_knockout.json') }, 'Download mix settings'),
+      el('button', { onclick: () => { mix = { ...KO_DEFAULTS }; sync(); changed(); } }, 'Reset')),
+    details);
+  sync();
+  requestAnimationFrame(refreshKnockout);
+  window.addEventListener('resize', refreshKnockout);
+  return card;
+}
+
 // ---------- State: localStorage, share links, import/export ----------
+// Settings from before the start and knockout sounds load fine: anything missing keeps its preset.
 const STORE = 'sound-lab:v1';
 const fresh = () => PRESETS.map(x => ({ id: x.id, badge: x.badge, name: x.name, file: x.file, p: { ...x.p } }));
-const snapshot = () => ({ version: 1, sounds: sounds.map(s => ({ id: s.id, name: s.name, file: s.file, p: s.p })) });
+const snapshot = () => ({
+  version: 1,
+  sounds: sounds.map(s => ({ id: s.id, name: s.name, file: s.file, p: s.p })),
+  knockout: { ...KO_DEFAULTS, ...mix },
+});
 
 function adopt(data) {
   if (!data || !Array.isArray(data.sounds)) throw new Error('Not Sound Lab settings');
@@ -392,7 +571,7 @@ function adopt(data) {
     const got = data.sounds.find(x => x.id === s.id);
     if (got) { s.p = { ...got.p }; if (typeof got.name === 'string') s.name = got.name; }
   }
-  return base;
+  return { sounds: base, mix: { ...KO_DEFAULTS, ...(data.knockout || {}) } };
 }
 function save() { try { localStorage.setItem(STORE, JSON.stringify(snapshot())); } catch (e) { /* private mode: fine */ } }
 function load() {
@@ -401,29 +580,38 @@ function load() {
     if (m) return adopt(JSON.parse(decodeURIComponent(escape(atob(m[1].replace(/-/g, '+').replace(/_/g, '/'))))));
   } catch (e) { say('That share link could not be read; showing your last settings instead.'); }
   try { const raw = localStorage.getItem(STORE); if (raw) return adopt(JSON.parse(raw)); } catch (e) { /* ignore */ }
-  return fresh();
+  return { sounds: fresh(), mix: { ...KO_DEFAULTS } };
 }
+function use(state) { sounds = state.sounds; mix = state.mix; }
 
 const status = document.getElementById('status');
 let statusTimer;
 function say(msg) { status.textContent = msg; clearTimeout(statusTimer); statusTimer = setTimeout(() => status.textContent = '', 5000); }
 
+let mix = { ...KO_DEFAULTS };
 const grid = document.getElementById('grid');
+const knockout = document.getElementById('knockout');
 const autoplay = document.getElementById('autoplay');
-function renderAll() { grid.replaceChildren(...sounds.map(buildCard)); }
+function renderAll() {
+  grid.replaceChildren(...sounds.map(buildCard));
+  knockout.replaceChildren(buildKnockout());
+}
 
-document.getElementById('playAll').addEventListener('click', () => sounds.forEach((s, i) => setTimeout(() => play(s), i * 700)));
+document.getElementById('playAll').addEventListener('click', () => {
+  sounds.forEach((s, i) => setTimeout(() => play(s), i * 700));
+  setTimeout(playKnockout, sounds.length * 700 + 400);
+});
 document.getElementById('downloadAll').addEventListener('click', () => {
   sounds.forEach((s, i) => setTimeout(() => download(s), i * 400));
-  say('Downloading six WAV files. Your browser may ask once to allow multiple downloads.');
+  setTimeout(() => saveFile(knockoutBlob(), 'sfx_knockout.json'), sounds.length * 400);
+  say('Downloading ' + sounds.length + ' WAV files and the knockout mix. Your browser may ask once to allow multiple downloads.');
 });
 document.getElementById('exportJson').addEventListener('click', () => {
-  const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify(snapshot(), null, 2)], { type: 'application/json' })), download: 'sound-lab-settings.json' });
-  document.body.append(a); a.click(); a.remove();
+  saveFile(new Blob([JSON.stringify(snapshot(), null, 2)], { type: 'application/json' }), 'sound-lab-settings.json');
 });
 document.getElementById('importJson').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
-  try { sounds = adopt(JSON.parse(await f.text())); renderAll(); save(); say('Imported ' + f.name + '.'); }
+  try { use(adopt(JSON.parse(await f.text()))); renderAll(); save(); say('Imported ' + f.name + '.'); }
   catch (err) { say('Could not import that file: ' + err.message); }
   e.target.value = '';
 });
@@ -431,20 +619,21 @@ document.getElementById('share').addEventListener('click', async () => {
   const code = btoa(unescape(encodeURIComponent(JSON.stringify(snapshot())))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const url = location.href.split('#')[0] + '#s=' + code;
   history.replaceState(null, '', url);
-  try { await navigator.clipboard.writeText(url); say('Share link copied. It carries all six sounds’ settings.'); }
+  try { await navigator.clipboard.writeText(url); say('Share link copied. It carries every sound’s settings and the knockout mix.'); }
   catch (e) { say('Share link is in the address bar; copy it from there.'); }
 });
 document.getElementById('resetAll').addEventListener('click', () => {
-  if (!confirm('Reset all six sounds to their starting presets?')) return;
-  sounds = fresh(); renderAll(); save(); history.replaceState(null, '', location.href.split('#')[0]);
+  if (!confirm('Reset every sound and the knockout mix to their starting presets?')) return;
+  use({ sounds: fresh(), mix: { ...KO_DEFAULTS } }); renderAll(); save(); history.replaceState(null, '', location.href.split('#')[0]);
 });
 document.addEventListener('keydown', e => {
   if (e.target.closest('input, textarea')) return;
-  const i = '123456'.indexOf(e.key);
+  if (e.key === 'k' || e.key === 'K') { playKnockout(); return; }
+  const i = '1234567890'.indexOf(e.key);
   if (i >= 0 && sounds[i]) play(sounds[i]);
 });
 
-sounds = load();
+use(load());
 renderAll();
 </script>
 </body>
