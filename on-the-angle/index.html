@@ -19,8 +19,9 @@
   #stage{position:fixed;inset:0}
   canvas{display:block;touch-action:none}
   /* Kiosk ("#...&kiosk"): just the picture, for showing inside another page.
-     Every panel and the stats over the goal are hidden. */
-  body.kiosk .panel, body.kiosk #corner, body.kiosk #statsHud{display:none!important}
+     The floating panels are hidden; the billboard over the goal (how much
+     of the goal mouth is covered) stays, as it's part of the picture. */
+  body.kiosk .panel, body.kiosk #corner{display:none!important}
 
   .panel{
     position:fixed;background:var(--panel);border:1px solid var(--edge);border-radius:12px;
@@ -2441,7 +2442,8 @@ function serialise(){
     cam:[cam.target.x.toFixed(2),cam.target.y.toFixed(2),cam.target.z.toFixed(2),
          cam.radius.toFixed(2),deg(cam.theta).toFixed(1),deg(cam.phi).toFixed(1)].join('~') };
 }
-/* "kiosk" in the hash, with or without a value: just the picture, no panels.
+/* "kiosk" in the hash, with or without a value: just the picture and the
+   billboard over the goal, no panels.
    Kept in the hash when it is rewritten, so the link still says so. */
 const kiosk=/(^|&)kiosk(=[^&]*)?(&|$)/.test(location.hash.slice(1));
 if(kiosk) document.body.classList.add('kiosk');
