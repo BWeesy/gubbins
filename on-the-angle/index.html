@@ -18,6 +18,9 @@
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden}
   #stage{position:fixed;inset:0}
   canvas{display:block;touch-action:none}
+  /* Kiosk ("#...&kiosk"): just the picture, for showing inside another page.
+     Every panel and the stats over the goal are hidden. */
+  body.kiosk .panel, body.kiosk #corner, body.kiosk #statsHud{display:none!important}
 
   .panel{
     position:fixed;background:var(--panel);border:1px solid var(--edge);border-radius:12px;
@@ -2438,9 +2441,14 @@ function serialise(){
     cam:[cam.target.x.toFixed(2),cam.target.y.toFixed(2),cam.target.z.toFixed(2),
          cam.radius.toFixed(2),deg(cam.theta).toFixed(1),deg(cam.phi).toFixed(1)].join('~') };
 }
+/* "kiosk" in the hash, with or without a value: just the picture, no panels.
+   Kept in the hash when it is rewritten, so the link still says so. */
+const kiosk=/(^|&)kiosk(=[^&]*)?(&|$)/.test(location.hash.slice(1));
+if(kiosk) document.body.classList.add('kiosk');
 function writeUrl(){
   const p=serialise(), parts=[];
   for(const k in p) parts.push(k+'='+encodeURIComponent(p[k]));
+  if(kiosk) parts.push('kiosk');
   try { history.replaceState(null,'','#'+parts.join('&')); }   // blocked in sandboxed about:srcdoc; harmless to skip
   catch(e){ /* history not writable in this context (e.g. artifact preview) */ }
 }
